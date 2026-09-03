@@ -1,0 +1,67 @@
+# ==============================================================================
+# Git Ignore - Pipe Counter Pro (Python PyQt6 & Flutter Mobile)
+# ==============================================================================
+
+# PyInstaller / Build Artifacts (NEVER COMMIT 1GB BINARIES TO GIT)
+dist/
+build/
+*.spec.bak
+*.exe
+*.dll
+*.pyd
+*.so
+*.dylib
+*.bin
+
+# Python Runtime & Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+.mypy_cache/
+venv/
+env/
+.venv/
+
+# Temporary / Output Data
+*.xlsx
+*.csv
+*.log
+Output/
+*.iss
+
+# IDEs and Editors
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.DS_Store
+Thumbs.db
+
+# Flutter / Dart / Mobile
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/coverage/
+**/doc/api/
+**/ios/Flutter/.last_build_id
+/android/app/debug/
+/android/app/profile/
+/android/app/release/
+/android/.gradle/
+/android/local.properties
+/android/captures/
+.gradle/
+
+# Secrets / Credentials
+.env*
+*.pem
+*.key
+*.cert
+credentials.json
