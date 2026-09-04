@@ -17,60 +17,59 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: "📥 Step 1 — Checkout repository"
+      - name: "Step 1 - Checkout repository"
         uses: actions/checkout@v4
 
-      - name: "☕ Step 2 — Set up Java 17 (Temurin)"
+      - name: "Step 2 - Set up Java 17 (Temurin)"
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
           cache: 'gradle'
 
-      - name: "🐦 Step 3 — Set up Flutter (stable)"
+      - name: "Step 3 - Set up Flutter (stable)"
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
           cache: true
 
-      - name: "🔧 Step 4 — Install Android SDK packages (NDK + build tools)"
+      - name: "Step 4 - Install Android SDK packages (NDK 28 + CMake + build tools)"
         run: |
-          echo "Installing required Android SDK components..."
+          echo "Installing Android SDK components..."
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
             "platforms;android-36" \
             "build-tools;36.0.0" \
-            "ndk;26.1.10909125" \
-            "platform-tools" || true
-          echo "NDK installed at: $ANDROID_HOME/ndk/26.1.10909125"
-          ls $ANDROID_HOME/ndk/ || echo "NDK directory listing"
+            "ndk;28.2.13676358" \
+            "cmake;3.22.1" \
+            "platform-tools" 2>&1 | tail -5
+          echo "NDK 28 installed: $(ls $ANDROID_HOME/ndk/)"
+          echo "CMake installed: $(ls $ANDROID_HOME/cmake/)"
 
-      - name: "📦 Step 5 — Install Flutter dependencies"
+      - name: "Step 5 - Install Flutter dependencies"
         run: flutter pub get
 
-      - name: "🧪 Step 6 — Run test suite"
-        run: flutter test
+      - name: "Step 6 - Run test suite"
+        run: flutter test --no-pub
 
-      - name: "🔨 Step 7 — Build Release APK"
-        env:
-          ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/26.1.10909125
+      - name: "Step 7 - Build Release APK"
         run: |
           flutter build apk --release
-          echo "Build complete! APK size:"
+          echo "=== APK BUILD SUCCESSFUL ==="
           ls -lh build/app/outputs/flutter-apk/app-release.apk
 
-      - name: "📋 Step 8 — Rename and prepare APK"
+      - name: "Step 8 - Rename and prepare APK"
         run: |
           cp build/app/outputs/flutter-apk/app-release.apk PipeCounterPro_Android_v1.0.apk
-          echo "Final APK ready: $(ls -lh PipeCounterPro_Android_v1.0.apk)"
+          echo "APK ready: $(ls -lh PipeCounterPro_Android_v1.0.apk)"
 
-      - name: "⬆️ Step 9 — Upload APK as downloadable artifact"
+      - name: "Step 9 - Upload APK as downloadable artifact"
         uses: actions/upload-artifact@v4
         with:
           name: PipeCounterPro_Android_v1.0
           path: PipeCounterPro_Android_v1.0.apk
           retention-days: 30
 
-      - name: "🚀 Step 10 — Attach APK to GitHub Release v1.0"
+      - name: "Step 10 - Attach APK to GitHub Release v1.0"
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0
