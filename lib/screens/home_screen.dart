@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/app_settings.dart';
+import '../models/pipe_detection.dart';
 import '../providers/detection_provider.dart';
 import '../providers/settings_provider.dart';
 import '../widgets/confidence_slider.dart';
