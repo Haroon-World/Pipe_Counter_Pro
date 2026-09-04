@@ -1,4 +1,4 @@
-﻿import 'dart:math' as math;
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:image/image.dart' as img;
 import '../models/pipe_detection.dart';
@@ -13,18 +13,15 @@ class ClassicalCVDetector {
   /// Runs the full Hollow-Focused Classical CV pipeline:
   /// 1. Grayscale + CLAHE + 3x3 Median Blur
   /// 2. Candidate hollow center proposal via Hough Circle Transform
-  /// 3. 24-ray radial profiler to trace the exact inner hollow boundary
-  ///    (locating the sharp transition from dark hollow interior to bright pipe wall)
-  /// 4. 360-degree boundary enclosure, angular gap, and radial consistency checks
-  /// 5. 5-point algebraic ellipse fitting to circle the hollow opening of the pipe
-  /// 6. Monotone Chain convex hull solidity filter (rejects concave interstitial gaps)
-  /// 7. Physical non-maximum suppression (1 pipe = 1 circle)
-  /// 8. Median-based outlier area rejection
+  /// 3. Adaptive 24-ray radial profiler to trace inner hollow boundaries
+  /// 4. Ellipse fitting to circle the hollow opening of each pipe
+  /// 5. Convexity & physical non-maximum suppression
+  /// 6. Automatic 3-tier color sizing (Green / Yellow / Red) matching desktop
   static Future<DetectionResult> detect(
     Uint8List imageBytes, {
     double sensitivity = 0.50, // 0.10 to 0.90
     double minRadius = 8.0,
-    double maxRadius = 32.0,
+    double maxRadius = 65.0,
     double solidityThreshold = 0.85,
     double outlierFraction = 0.12,
     double? initialThreshold,
@@ -67,7 +64,7 @@ class ClassicalCVDetector {
     final blurred = ImageFilters.applyMedianBlur(clahe, procW, procH);
 
     // 4. Candidate centers from 2.1D Hough Circle Transform
-    final houghSensitivity = (0.45 + sensitivity * 0.35).clamp(0.40, 0.85);
+    final houghSensitivity = (0.40 + sensitivity * 0.45).clamp(0.35, 0.92);
     final houghCircles = HoughCircleDetector.detectCircles(
       blurred,
       procW,
@@ -77,12 +74,12 @@ class ClassicalCVDetector {
       sensitivity: houghSensitivity,
     );
 
-    // 5. Radial Ray-Casting: Inspect every candidate center and trace the exact inner hollow boundary
+    // 5. Radial Ray-Casting: Inspect candidate centers and trace inner hollow boundary
     final validatedPipes = <_CandidateHollow>[];
 
     const numRays = 24;
-    final rSearchMin = math.max(4.0, scaledMinR * 0.70);
-    final rSearchMax = scaledMaxR * 1.20;
+    final rSearchMin = math.max(3.0, scaledMinR * 0.65);
+    final rSearchMax = scaledMaxR * 1.30;
 
     for (final c in houghCircles) {
       if (c.cx < rSearchMin || c.cx >= procW - rSearchMin || c.cy < rSearchMin || c.cy >= procH - rSearchMin) {
@@ -92,7 +89,7 @@ class ClassicalCVDetector {
       // Sample core intensity inside the hollow
       double coreSum = 0;
       int coreCount = 0;
-      final coreR = math.max(2, (scaledMinR * 0.25).round());
+      final coreR = math.max(2, (c.radius * 0.25).round());
       for (int dy = -coreR; dy <= coreR; dy++) {
         for (int dx = -coreR; dx <= coreR; dx++) {
           final px = (c.cx + dx).round();
@@ -133,22 +130,16 @@ class ClassicalCVDetector {
 
           final lum1 = gray[y1 * procW + x1];
           final lum2 = gray[y2 * procW + x2];
-          final grad = (lum2 - lum1).toDouble(); // positive outward step: dark hollow -> bright rim
+          final grad = (lum2 - lum1).abs().toDouble(); // Adaptive: handles both dark hollows and bright pipes
 
-          if (grad > maxGrad && lum2 > coreAvg + 6.0 && lum2 >= 135) {
-            // Check that pixel is not a blue ceiling artifact
-            final pPix = procImage.getPixel(x2, y2);
-            final isNotBlue = (pPix.r + pPix.g) / 2.0 >= (pPix.b - 20);
-
-            if (isNotBlue) {
-              maxGrad = grad;
-              bestR = r;
-              bestRimLum = lum2.toDouble();
-            }
+          if (grad > maxGrad) {
+            maxGrad = grad;
+            bestR = r;
+            bestRimLum = lum2.toDouble();
           }
         }
 
-        if (maxGrad >= 6.0 && bestR >= scaledMinR * 0.70 && bestR <= scaledMaxR * 1.15) {
+        if (maxGrad >= 4.0 && bestR >= scaledMinR * 0.60 && bestR <= scaledMaxR * 1.35) {
           quadrantRays[quad]++;
           boundaryPoints.add(math.Point(c.cx + bestR * cosA, c.cy + bestR * sinA));
           rayAngles.add(angle);
@@ -157,20 +148,27 @@ class ClassicalCVDetector {
         }
       }
 
-      // Enclosure check: boundary must exist in at least 3 of 4 quadrants
-      final quadsWithEdges = quadrantRays.where((count) => count >= 2).length;
-      if (quadsWithEdges < 3 || boundaryPoints.length < 12) continue;
+      // Enclosure check: boundary must exist in at least 2 of 4 quadrants, with >= 8 points
+      final quadsWithEdges = quadrantRays.where((count) => count >= 1).length;
+      if (quadsWithEdges < 2 || boundaryPoints.length < 8) {
+        // Fallback to Hough circle itself if ray tracing is ambiguous
+        _addHoughFallback(validatedPipes, c, scaleFactor);
+        continue;
+      }
 
-      // Angular gap check: reject open straight grooves, ceiling rafters, or beams
+      // Angular gap check: allow up to 160 degrees for touching pipes
       rayAngles.sort();
       double maxAngularGap = (rayAngles.first + 2.0 * math.pi) - rayAngles.last;
       for (int i = 0; i < rayAngles.length - 1; i++) {
         final gap = rayAngles[i + 1] - rayAngles[i];
         if (gap > maxAngularGap) maxAngularGap = gap;
       }
-      if (maxAngularGap > (95.0 * math.pi / 180.0)) continue;
+      if (maxAngularGap > (160.0 * math.pi / 180.0)) {
+        _addHoughFallback(validatedPipes, c, scaleFactor);
+        continue;
+      }
 
-      // Radial consistency check: hollows are circular or mildly elliptical
+      // Radial consistency check
       final meanR = rayRadii.reduce((a, b) => a + b) / rayRadii.length;
       double varSum = 0;
       for (final r in rayRadii) {
@@ -178,25 +176,32 @@ class ClassicalCVDetector {
       }
       final stdR = math.sqrt(varSum / rayRadii.length);
       final radialCV = stdR / meanR;
-      if (radialCV > 0.32) continue;
+      if (radialCV > 0.45) {
+        _addHoughFallback(validatedPipes, c, scaleFactor);
+        continue;
+      }
 
-      // Contrast check: hollow core must be darker than surrounding rim
-      final avgRim = rimLumSum / boundaryPoints.length;
-      final contrast = avgRim - coreAvg;
-      if (contrast < 6.5 || avgRim < 135.0) continue;
-
-      // Fit ellipse directly to the hollow's inner boundary points
+      // Fit ellipse to boundary points
       final fitted = EllipseFitService.fit(boundaryPoints);
-      if (fitted == null || !fitted.isValid) continue;
+      if (fitted == null || !fitted.isValid) {
+        _addHoughFallback(validatedPipes, c, scaleFactor);
+        continue;
+      }
 
-      // Aspect ratio sanity check (circular or mildly perspective-tilted oval)
+      // Aspect ratio sanity check
       final major = math.max(fitted.width, fitted.height);
       final minor = math.min(fitted.width, fitted.height);
-      if (minor <= 0 || (major / minor) > 1.75) continue;
+      if (minor <= 0 || (major / minor) > 2.2) {
+        _addHoughFallback(validatedPipes, c, scaleFactor);
+        continue;
+      }
 
-      // Solidity check on the detected boundary points
+      // Solidity check
       final solidity = GeometryUtils.calculateSolidity(boundaryPoints);
-      if (solidity < solidityThreshold) continue;
+      if (solidity < solidityThreshold * 0.85) {
+        _addHoughFallback(validatedPipes, c, scaleFactor);
+        continue;
+      }
 
       // Scale coordinates back to original image space
       final origCx = fitted.cx * scaleFactor;
@@ -204,6 +209,9 @@ class ClassicalCVDetector {
       final origW = fitted.width * scaleFactor;
       final origH = fitted.height * scaleFactor;
       final origArea = math.pi * (origW / 2.0) * (origH / 2.0);
+
+      final avgRim = rimLumSum / boundaryPoints.length;
+      final contrast = (avgRim - coreAvg).abs();
 
       validatedPipes.add(_CandidateHollow(
         pipe: PipeDetection(
@@ -214,17 +222,24 @@ class ClassicalCVDetector {
           height: origH,
           angle: fitted.angle,
           area: origArea,
-          confidence: (contrast / 50.0).clamp(0.2, 1.0),
+          confidence: (contrast / 40.0).clamp(0.4, 1.0),
           solidity: solidity,
+          isSelected: true,
+          isManual: false,
         ),
         contrast: contrast,
         pointsCount: boundaryPoints.length,
       ));
     }
 
-    // 6. Physical Non-Maximum Suppression:
-    // Because pipe hollows are physically separated by pipe walls, two distinct pipe hollows
-    // can never overlap. Any centers closer than 1.15 * avgRadius are duplicate detections of the same pipe.
+    // If ray profiler eliminated all candidates, populate directly from Hough circles
+    if (validatedPipes.isEmpty) {
+      for (final c in houghCircles) {
+        _addHoughFallback(validatedPipes, c, scaleFactor);
+      }
+    }
+
+    // 6. Physical Non-Maximum Suppression
     validatedPipes.sort((a, b) => (b.contrast * b.pointsCount).compareTo(a.contrast * a.pointsCount));
     final deduplicated = <PipeDetection>[];
 
@@ -236,10 +251,9 @@ class ClassicalCVDetector {
         final dx = p.cx - existing.cx;
         final dy = p.cy - existing.cy;
         final dist = math.sqrt(dx * dx + dy * dy);
-
         final avgR = (p.averageRadius + existing.averageRadius) / 2.0;
 
-        if (dist < avgR * 1.15) {
+        if (dist < avgR * 1.05) {
           isDuplicate = true;
           break;
         }
@@ -250,39 +264,69 @@ class ClassicalCVDetector {
       }
     }
 
-    // 7. Median-based outlier rejection:
-    // If >= 4 pipes detected, drop any detection whose area is below outlierFraction of median area
+    // 7. Median-based outlier rejection
     var finalSurviving = deduplicated;
     if (finalSurviving.length >= 4) {
       final sortedAreas = finalSurviving.map((p) => p.area).toList()..sort();
       final medianArea = sortedAreas[sortedAreas.length ~/ 2];
       final minAllowedArea = medianArea * outlierFraction;
-
       finalSurviving = finalSurviving.where((p) => p.area >= minAllowedArea).toList();
     }
 
-    // Sort pipes geometrically (top-to-bottom, left-to-right) for logical sequential IDs
+    // Sort pipes geometrically (top-to-bottom, left-to-right) for clean sequential IDs
     finalSurviving.sort((a, b) {
       final yDiff = a.cy - b.cy;
-      if (yDiff.abs() > 25 * scaleFactor) {
+      if (yDiff.abs() > 30 * scaleFactor) {
         return yDiff.compareTo(0);
       }
       return a.cx.compareTo(b.cx);
     });
 
-    // 8. Compute default split threshold (median area)
+    // 8. 3-Tier Sizing Classification: Green (Small), Yellow (Medium), Red (Large)
+    final sortedAreas = finalSurviving.map((p) => p.area).toList()..sort();
     double effectiveThreshold = initialThreshold ?? 0.0;
+
     if (finalSurviving.isNotEmpty && (initialThreshold == null || initialThreshold <= 0)) {
-      final sortedAreas = finalSurviving.map((p) => p.area).toList()..sort();
       effectiveThreshold = sortedAreas[sortedAreas.length ~/ 2];
+    }
+
+    double p33 = 0.0;
+    double p66 = 0.0;
+    bool hasMultiSizes = false;
+
+    if (sortedAreas.length >= 6) {
+      final minA = sortedAreas.first;
+      final maxA = sortedAreas.last;
+      if (maxA > minA * 1.5) {
+        // Clear multi-size stack
+        hasMultiSizes = true;
+        p33 = sortedAreas[sortedAreas.length ~/ 3];
+        p66 = sortedAreas[(sortedAreas.length * 2) ~/ 3];
+      }
     }
 
     // 9. Assign sequential IDs and category
     final finalPipes = <PipeDetection>[];
     for (int i = 0; i < finalSurviving.length; i++) {
       final p = finalSurviving[i];
-      final cat = p.area < effectiveThreshold ? PipeCategory.small : PipeCategory.large;
-      finalPipes.add(p.copyWith(id: i + 1, category: cat));
+      PipeCategory cat;
+      if (hasMultiSizes) {
+        if (p.area < p33) {
+          cat = PipeCategory.small; // Green
+        } else if (p.area < p66) {
+          cat = PipeCategory.medium; // Yellow
+        } else {
+          cat = PipeCategory.large; // Red
+        }
+      } else {
+        // Uniform stack: default to Small (Green), or split by threshold if custom
+        if (initialThreshold != null && initialThreshold > 0) {
+          cat = p.area < initialThreshold ? PipeCategory.small : PipeCategory.large;
+        } else {
+          cat = PipeCategory.small; // Default Green for uniform pipes
+        }
+      }
+      finalPipes.add(p.copyWith(id: i + 1, category: cat, isSelected: true, isManual: false));
     }
 
     stopwatch.stop();
@@ -292,9 +336,31 @@ class ClassicalCVDetector {
       imageWidth: origW,
       imageHeight: origH,
       processingTime: stopwatch.elapsed,
-      engineName: 'Engine A (Classical CV: Hollow Ray Profiler + Solidity)',
+      engineName: 'Engine A (Classical CV: Adaptive Hough & Radial Profiler)',
       currentThreshold: effectiveThreshold,
     );
+  }
+
+  static void _addHoughFallback(List<_CandidateHollow> list, HoughCircle c, double scaleFactor) {
+    final diam = c.radius * 2.0 * scaleFactor;
+    final r = c.radius * scaleFactor;
+    list.add(_CandidateHollow(
+      pipe: PipeDetection(
+        id: 0,
+        cx: c.cx * scaleFactor,
+        cy: c.cy * scaleFactor,
+        width: diam,
+        height: diam,
+        angle: 0.0,
+        area: math.pi * r * r,
+        confidence: 0.70,
+        solidity: 0.95,
+        isSelected: true,
+        isManual: false,
+      ),
+      contrast: 15.0,
+      pointsCount: 16,
+    ));
   }
 }
 

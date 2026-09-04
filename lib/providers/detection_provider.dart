@@ -1,4 +1,4 @@
-﻿import 'dart:math' as math;
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -11,6 +11,26 @@ import '../services/classical_cv_detector.dart';
 import '../services/tflite_detector.dart';
 import 'settings_provider.dart';
 
+enum CanvasTool {
+  pan,
+  add,
+  delete,
+  select;
+
+  String get displayName {
+    switch (this) {
+      case CanvasTool.pan:
+        return 'Pan & Zoom';
+      case CanvasTool.add:
+        return 'Add Pipe';
+      case CanvasTool.delete:
+        return 'Delete Pipe';
+      case CanvasTool.select:
+        return 'Toggle Count';
+    }
+  }
+}
+
 class DetectionState {
   final Uint8List? imageBytes;
   final String? imageName;
@@ -22,6 +42,12 @@ class DetectionState {
   final DetectionResult? result;
   final double sizeThreshold;
 
+  // Interactive manual tool states
+  final CanvasTool selectedTool;
+  final PipeCategory activeAddCategory;
+  final double manualAddRadius;
+  final List<List<PipeDetection>> undoStack;
+
   const DetectionState({
     this.imageBytes,
     this.imageName,
@@ -32,10 +58,15 @@ class DetectionState {
     this.errorMessage,
     this.result,
     this.sizeThreshold = 500.0,
+    this.selectedTool = CanvasTool.pan,
+    this.activeAddCategory = PipeCategory.small,
+    this.manualAddRadius = 25.0,
+    this.undoStack = const [],
   });
 
   bool get hasImage => imageBytes != null && imageWidth > 0 && imageHeight > 0;
   bool get hasResults => result != null && result!.pipes.isNotEmpty;
+  bool get canUndo => undoStack.isNotEmpty;
 
   DetectionState copyWith({
     Uint8List? imageBytes,
@@ -47,6 +78,10 @@ class DetectionState {
     String? errorMessage,
     DetectionResult? result,
     double? sizeThreshold,
+    CanvasTool? selectedTool,
+    PipeCategory? activeAddCategory,
+    double? manualAddRadius,
+    List<List<PipeDetection>>? undoStack,
     bool clearImage = false,
     bool clearResult = false,
     bool clearError = false,
@@ -61,6 +96,10 @@ class DetectionState {
       errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
       result: clearResult ? null : (result ?? this.result),
       sizeThreshold: sizeThreshold ?? this.sizeThreshold,
+      selectedTool: selectedTool ?? this.selectedTool,
+      activeAddCategory: activeAddCategory ?? this.activeAddCategory,
+      manualAddRadius: manualAddRadius ?? this.manualAddRadius,
+      undoStack: undoStack ?? this.undoStack,
     );
   }
 }
@@ -76,6 +115,124 @@ class DetectionNotifier extends StateNotifier<DetectionState> {
     _tfliteDetector.close();
     super.dispose();
   }
+
+  // --- Tool & Manual Annotation Controls ---
+
+  void setSelectedTool(CanvasTool tool) {
+    state = state.copyWith(selectedTool: tool);
+  }
+
+  void setActiveAddCategory(PipeCategory cat) {
+    state = state.copyWith(activeAddCategory: cat);
+  }
+
+  void setManualAddRadius(double radius) {
+    state = state.copyWith(manualAddRadius: radius.clamp(4.0, 300.0));
+  }
+
+  void _pushUndo() {
+    final currentPipes = state.result?.pipes ?? const <PipeDetection>[];
+    final newStack = List<List<PipeDetection>>.from(state.undoStack)..add(List.from(currentPipes));
+    // Keep max 20 undo steps
+    if (newStack.length > 20) {
+      newStack.removeAt(0);
+    }
+    state = state.copyWith(undoStack: newStack);
+  }
+
+  void undo() {
+    if (state.undoStack.isEmpty) return;
+    final newStack = List<List<PipeDetection>>.from(state.undoStack);
+    final previousPipes = newStack.removeLast();
+
+    final currentResult = state.result ??
+        DetectionResult(
+          pipes: const [],
+          imageWidth: state.imageWidth,
+          imageHeight: state.imageHeight,
+          processingTime: Duration.zero,
+          engineName: 'Manual Annotation',
+          currentThreshold: state.sizeThreshold,
+        );
+
+    state = state.copyWith(
+      result: currentResult.copyWith(pipes: previousPipes),
+      undoStack: newStack,
+    );
+  }
+
+  /// Add a manual pipe circle at image coordinates (cx, cy)
+  void addManualPipe(double cx, double cy, {double? radius, PipeCategory? category}) {
+    _pushUndo();
+
+    final currentPipes = state.result?.pipes ?? const <PipeDetection>[];
+    int nextId = 1;
+    if (currentPipes.isNotEmpty) {
+      nextId = currentPipes.map((p) => p.id).reduce(math.max) + 1;
+    }
+
+    final r = radius ?? state.manualAddRadius;
+    final cat = category ?? state.activeAddCategory;
+    final diam = r * 2.0;
+
+    final newPipe = PipeDetection(
+      id: nextId,
+      cx: cx,
+      cy: cy,
+      width: diam,
+      height: diam,
+      angle: 0.0,
+      area: math.pi * r * r,
+      category: cat,
+      confidence: 1.0,
+      solidity: 1.0,
+      isSelected: true,
+      isManual: true,
+    );
+
+    final currentResult = state.result ??
+        DetectionResult(
+          pipes: const [],
+          imageWidth: state.imageWidth,
+          imageHeight: state.imageHeight,
+          processingTime: Duration.zero,
+          engineName: 'Manual Annotation',
+          currentThreshold: state.sizeThreshold,
+        );
+
+    state = state.copyWith(
+      result: currentResult.withPipeAdded(newPipe),
+    );
+  }
+
+  /// Delete a pipe by ID
+  void deletePipe(int id) {
+    if (state.result == null) return;
+    _pushUndo();
+    state = state.copyWith(
+      result: state.result!.withPipeRemoved(id),
+    );
+  }
+
+  /// Toggle active / excluded state for a pipe
+  void togglePipeSelected(int id) {
+    if (state.result == null) return;
+    _pushUndo();
+    state = state.copyWith(
+      result: state.result!.withPipeToggled(id),
+    );
+  }
+
+  /// Recolor a pipe by ID
+  void recolorPipe(int id, PipeCategory newCat) {
+    if (state.result == null) return;
+    _pushUndo();
+    state = state.copyWith(
+      result: state.result!.withPipeRecolored(id, newCat),
+    );
+  }
+
+  // --- Image Loading & Camera ---
 
   /// Pick an image file from device storage/gallery (Cross-Platform)
   Future<void> pickImageFromGallery() async {
@@ -146,6 +303,7 @@ class DetectionNotifier extends StateNotifier<DetectionState> {
         imageWidth: decoded.width,
         imageHeight: decoded.height,
         isProcessing: false,
+        undoStack: const [],
         clearResult: true,
         clearError: true,
       );
@@ -165,10 +323,12 @@ class DetectionNotifier extends StateNotifier<DetectionState> {
     if (state.imageWidth <= 0 || state.imageHeight <= 0) return;
 
     final shortSide = math.min(state.imageWidth, state.imageHeight);
-    final minR = math.max(6.0, (shortSide * 0.016).roundToDouble());
-    final maxR = math.max(minR + 10.0, (shortSide * 0.060).roundToDouble());
+    final minR = math.max(8.0, (shortSide * 0.015).roundToDouble());
+    final maxR = math.max(minR + 15.0, (shortSide * 0.080).roundToDouble());
+    final medianR = ((minR + maxR) / 2.0).roundToDouble();
 
     ref.read(settingsProvider.notifier).setRadiusRange(minR, maxR);
+    state = state.copyWith(manualAddRadius: medianR);
   }
 
   /// Runs pipe detection using the currently selected engine
@@ -233,13 +393,17 @@ class DetectionNotifier extends StateNotifier<DetectionState> {
         state = state.copyWith(
           isProcessing: false,
           result: result,
-          errorMessage: 'No pipe openings detected. Try adjusting Min/Max radius or sensitivity.',
+          errorMessage: 'No pipe openings detected automatically. You can adjust Min/Max radius or use the [Add Pipe] tool to mark pipes manually!',
         );
       } else {
+        // Update default manual add radius to match detected pipes' average radius
+        final avgDetectedRadius = result.pipes.map((p) => p.averageRadius).reduce((a, b) => a + b) / result.pipes.length;
+
         state = state.copyWith(
           isProcessing: false,
           result: result,
           sizeThreshold: result.currentThreshold,
+          manualAddRadius: avgDetectedRadius.roundToDouble(),
           clearError: true,
         );
       }
@@ -269,4 +433,3 @@ class DetectionNotifier extends StateNotifier<DetectionState> {
 final detectionProvider = StateNotifierProvider<DetectionNotifier, DetectionState>((ref) {
   return DetectionNotifier(ref);
 });
-

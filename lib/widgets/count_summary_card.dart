@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import '../models/pipe_detection.dart';
 
 class CountSummaryCard extends StatelessWidget {
@@ -9,7 +9,10 @@ class CountSummaryCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final total = result?.totalCount ?? 0;
+    final active = result?.activeCount ?? 0;
+    final deselected = result?.deselectedCount ?? 0;
     final small = result?.smallCount ?? 0;
+    final medium = result?.mediumCount ?? 0;
     final large = result?.largeCount ?? 0;
 
     return Card(
@@ -23,9 +26,19 @@ class CountSummaryCard extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text(
-                  'Pipe Count Summary',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Pipe Count Summary',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    ),
+                    if (deselected > 0)
+                      Text(
+                        '$deselected pipe${deselected == 1 ? "" : "s"} excluded',
+                        style: const TextStyle(fontSize: 11, color: Colors.grey),
+                      ),
+                  ],
                 ),
                 if (result != null)
                   Container(
@@ -45,35 +58,50 @@ class CountSummaryCard extends StatelessWidget {
                   ),
               ],
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 14),
             Row(
               children: [
-                // Total Count
+                // Total / Active Count Tile
                 Expanded(
+                  flex: 3,
                   child: _MetricTile(
-                    label: 'TOTAL',
-                    value: '$total',
+                    label: deselected > 0 ? 'COUNTED' : 'TOTAL',
+                    value: deselected > 0 ? '$active' : '$total',
+                    subValue: deselected > 0 ? 'of $total' : null,
                     color: Theme.of(context).colorScheme.primary,
                     icon: Icons.all_inclusive,
                   ),
                 ),
-                const SizedBox(width: 8),
-                // Small Count (Green)
+                const SizedBox(width: 6),
+                // Small (Green)
                 Expanded(
+                  flex: 2,
                   child: _MetricTile(
                     label: 'SMALL',
                     value: '$small',
-                    color: const Color(0xFF00C853),
+                    color: const Color(0xFF22C55E),
                     icon: Icons.lens,
                   ),
                 ),
-                const SizedBox(width: 8),
-                // Large Count (Red)
+                const SizedBox(width: 6),
+                // Medium (Yellow)
                 Expanded(
+                  flex: 2,
+                  child: _MetricTile(
+                    label: 'MED',
+                    value: '$medium',
+                    color: const Color(0xFFEAB308),
+                    icon: Icons.lens,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                // Large (Red)
+                Expanded(
+                  flex: 2,
                   child: _MetricTile(
                     label: 'LARGE',
                     value: '$large',
-                    color: const Color(0xFFD50000),
+                    color: const Color(0xFFEF4444),
                     icon: Icons.lens,
                   ),
                 ),
@@ -89,12 +117,14 @@ class CountSummaryCard extends StatelessWidget {
 class _MetricTile extends StatelessWidget {
   final String label;
   final String value;
+  final String? subValue;
   final Color color;
   final IconData icon;
 
   const _MetricTile({
     required this.label,
     required this.value,
+    this.subValue,
     required this.color,
     required this.icon,
   });
@@ -102,7 +132,7 @@ class _MetricTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.09),
         borderRadius: BorderRadius.circular(12),
@@ -113,28 +143,37 @@ class _MetricTile extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, size: 12, color: color),
-              const SizedBox(width: 4),
+              Icon(icon, size: 10, color: color),
+              const SizedBox(width: 3),
               Text(
                 label,
                 style: TextStyle(
-                  fontSize: 11,
+                  fontSize: 10,
                   fontWeight: FontWeight.bold,
-                  letterSpacing: 0.5,
+                  letterSpacing: 0.4,
                   color: color,
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 4),
           Text(
             value,
             style: TextStyle(
-              fontSize: 26,
+              fontSize: 22,
               fontWeight: FontWeight.w800,
               color: color,
             ),
           ),
+          if (subValue != null)
+            Text(
+              subValue!,
+              style: TextStyle(
+                fontSize: 9,
+                fontWeight: FontWeight.w500,
+                color: color.withValues(alpha: 0.8),
+              ),
+            ),
         ],
       ),
     );

@@ -1,4 +1,4 @@
-﻿import 'dart:io';
+import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -14,37 +14,51 @@ class SettingsScreen extends ConsumerWidget {
   Future<void> _pickModelFile(BuildContext context, WidgetRef ref) async {
     try {
       final result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['tflite'],
+        type: FileType.any,
         dialogTitle: 'Select Custom Pipe Model (.tflite)',
       );
 
-      if (result != null && result.files.single.path != null) {
-        final sourcePath = result.files.single.path!;
-        final fileName = result.files.single.name;
+      if (result != null && result.files.isNotEmpty) {
+        final picked = result.files.single;
+        final fileName = picked.name;
+        final sourcePath = picked.path;
 
-        if (!kIsWeb) {
-          final appDocDir = await getApplicationDocumentsDirectory();
-          final modelsDir = Directory(p.join(appDocDir.path, 'models'));
-          if (!modelsDir.existsSync()) {
-            modelsDir.createSync(recursive: true);
+        if (!fileName.toLowerCase().endsWith('.tflite')) {
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Please select a valid TensorFlow Lite model (.tflite file).'),
+                backgroundColor: Colors.orange,
+              ),
+            );
           }
-
-          final targetPath = p.join(modelsDir.path, fileName);
-          await File(sourcePath).copy(targetPath);
-
-          await ref.read(settingsProvider.notifier).setCustomModel(targetPath, fileName);
-        } else {
-          await ref.read(settingsProvider.notifier).setCustomModel(sourcePath, fileName);
+          return;
         }
 
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Imported custom model: $fileName'),
-              backgroundColor: Colors.green.shade700,
-            ),
-          );
+        if (sourcePath != null) {
+          if (!kIsWeb) {
+            final appDocDir = await getApplicationDocumentsDirectory();
+            final modelsDir = Directory(p.join(appDocDir.path, 'models'));
+            if (!modelsDir.existsSync()) {
+              modelsDir.createSync(recursive: true);
+            }
+
+            final targetPath = p.join(modelsDir.path, fileName);
+            await File(sourcePath).copy(targetPath);
+
+            await ref.read(settingsProvider.notifier).setCustomModel(targetPath, fileName);
+          } else {
+            await ref.read(settingsProvider.notifier).setCustomModel(sourcePath, fileName);
+          }
+
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Imported custom model: $fileName'),
+                backgroundColor: Colors.green.shade700,
+              ),
+            );
+          }
         }
       }
     } catch (e) {
