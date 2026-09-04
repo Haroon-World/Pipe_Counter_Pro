@@ -13,50 +13,65 @@ permissions:
 
 jobs:
   build:
-    name: Build Lightweight Android APK
+    name: Build Android APK
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
+      - name: "📥 Step 1 — Checkout repository"
         uses: actions/checkout@v4
 
-      - name: Set up Java 17
+      - name: "☕ Step 2 — Set up Java 17 (Temurin)"
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
           cache: 'gradle'
 
-      - name: Set up Flutter
+      - name: "🐦 Step 3 — Set up Flutter (stable)"
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
           cache: true
 
-      - name: Install Dependencies
+      - name: "🔧 Step 4 — Install Android SDK packages (NDK + build tools)"
+        run: |
+          echo "Installing required Android SDK components..."
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;26.1.10909125" \
+            "platform-tools" || true
+          echo "NDK installed at: $ANDROID_HOME/ndk/26.1.10909125"
+          ls $ANDROID_HOME/ndk/ || echo "NDK directory listing"
+
+      - name: "📦 Step 5 — Install Flutter dependencies"
         run: flutter pub get
 
-      - name: Run Test Suite
+      - name: "🧪 Step 6 — Run test suite"
         run: flutter test
 
-      - name: Build Release APK
-        run: flutter build apk --release
+      - name: "🔨 Step 7 — Build Release APK"
+        env:
+          ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/26.1.10909125
+        run: |
+          flutter build apk --release
+          echo "Build complete! APK size:"
+          ls -lh build/app/outputs/flutter-apk/app-release.apk
 
-      - name: Prepare APK Asset
+      - name: "📋 Step 8 — Rename and prepare APK"
         run: |
           cp build/app/outputs/flutter-apk/app-release.apk PipeCounterPro_Android_v1.0.apk
-          ls -lh PipeCounterPro_Android_v1.0.apk
+          echo "Final APK ready: $(ls -lh PipeCounterPro_Android_v1.0.apk)"
 
-      - name: Upload APK as Workflow Artifact
+      - name: "⬆️ Step 9 — Upload APK as downloadable artifact"
         uses: actions/upload-artifact@v4
         with:
-          name: PipeCounterPro_Android_v1.0.apk
+          name: PipeCounterPro_Android_v1.0
           path: PipeCounterPro_Android_v1.0.apk
           retention-days: 30
 
-      - name: Attach APK to GitHub Release v1.0
+      - name: "🚀 Step 10 — Attach APK to GitHub Release v1.0"
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
         with:
           tag_name: v1.0
           files: PipeCounterPro_Android_v1.0.apk

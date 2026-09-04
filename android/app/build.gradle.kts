@@ -6,8 +6,8 @@ plugins {
 
 android {
     namespace = "com.pipecounter.pro.pipe_counter_pro"
-    compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    compileSdk = 36
+    ndkVersion = "26.1.10909125"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

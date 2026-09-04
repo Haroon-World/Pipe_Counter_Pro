@@ -36,6 +36,7 @@ from PyQt6.QtGui import (
     QBrush,
     QColor,
     QFont,
+    QIcon,
     QWheelEvent,
     QMouseEvent,
     QKeyEvent,
@@ -461,10 +462,22 @@ class InteractiveGraphicsView(QGraphicsView):
         self._zoom_level = 1.0
 
 
+def get_app_icon_path() -> str:
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    for name in ["app_icon.ico", "logo.png", "app_icon.png"]:
+        p = os.path.join(base, "assets", name)
+        if os.path.exists(p):
+            return p
+    return ""
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Pipe Counter Pro — AI Pipe Detection & Intelligent Size Differentiation")
+        icon_path = get_app_icon_path()
+        if icon_path:
+            self.setWindowIcon(QIcon(icon_path))
 
         # Responsive default window sizing matching monitor dimensions
         screen = QApplication.primaryScreen()
