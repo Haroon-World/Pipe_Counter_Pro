@@ -39,6 +39,39 @@ enum PipeCategory {
   }
 }
 
+enum SizeTierMode {
+  uniform,
+  twoSizes,
+  threeSizes,
+  autoDetect;
+
+  String get displayName {
+    switch (this) {
+      case SizeTierMode.uniform:
+        return '🟢 Uniform (All Green)';
+      case SizeTierMode.twoSizes:
+        return '🟢🔴 2 Types (Small / Large)';
+      case SizeTierMode.threeSizes:
+        return '🟢🟡🔴 3 Types (Small / Med / Large)';
+      case SizeTierMode.autoDetect:
+        return '⚡ Smart Auto-Detect';
+    }
+  }
+
+  String get shortLabel {
+    switch (this) {
+      case SizeTierMode.uniform:
+        return 'Uniform';
+      case SizeTierMode.twoSizes:
+        return '2 Types';
+      case SizeTierMode.threeSizes:
+        return '3 Types';
+      case SizeTierMode.autoDetect:
+        return 'Auto';
+    }
+  }
+}
+
 class PipeDetection {
   final int id;
   final double cx;
@@ -247,6 +280,68 @@ class DetectionResult {
       pipes: updated,
       currentThreshold: threshold,
     );
+  }
+
+  /// Reclassifies all detected pipes according to the chosen size tier mode
+  DetectionResult reclassifiedWithSizeTiers(SizeTierMode mode) {
+    if (pipes.isEmpty) return this;
+
+    final targetPipes = pipes.where((p) => !p.isManual).toList();
+    if (targetPipes.isEmpty) return this;
+
+    final diams = targetPipes.map((p) => p.diameter).toList()..sort();
+    final meanDiam = diams.reduce((a, b) => a + b) / diams.length;
+    double varSum = 0;
+    for (final d in diams) {
+      varSum += (d - meanDiam) * (d - meanDiam);
+    }
+    final stdDiam = math.sqrt(varSum / diams.length);
+    final cv = meanDiam > 0 ? (stdDiam / meanDiam) : 0.0;
+
+    SizeTierMode effectiveMode = mode;
+    if (effectiveMode == SizeTierMode.autoDetect) {
+      final diamRange = diams.last - diams.first;
+      if (cv < 0.12 || diamRange < 6.0) {
+        effectiveMode = SizeTierMode.uniform;
+      } else {
+        effectiveMode = SizeTierMode.twoSizes;
+      }
+    }
+
+    final updated = pipes.map((p) {
+      if (p.isManual) return p; // Preserve user's manual color choice
+
+      PipeCategory newCat;
+      switch (effectiveMode) {
+        case SizeTierMode.uniform:
+          newCat = PipeCategory.small; // All Green
+          break;
+
+        case SizeTierMode.twoSizes:
+          final medianDiam = diams[diams.length ~/ 2];
+          newCat = p.diameter <= medianDiam ? PipeCategory.small : PipeCategory.large;
+          break;
+
+        case SizeTierMode.threeSizes:
+          final p33 = diams[diams.length ~/ 3];
+          final p66 = diams[(diams.length * 2) ~/ 3];
+          if (p.diameter <= p33) {
+            newCat = PipeCategory.small; // Green
+          } else if (p.diameter <= p66) {
+            newCat = PipeCategory.medium; // Yellow
+          } else {
+            newCat = PipeCategory.large; // Red
+          }
+          break;
+
+        case SizeTierMode.autoDetect:
+          newCat = PipeCategory.small;
+          break;
+      }
+      return p.copyWith(category: newCat);
+    }).toList();
+
+    return copyWith(pipes: updated);
   }
 
   /// Toggle active/excluded state for a pipe

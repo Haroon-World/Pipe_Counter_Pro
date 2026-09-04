@@ -91,7 +91,30 @@ class SettingsScreen extends ConsumerWidget {
             'DETECTION ENGINE',
             style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 1.0, color: Colors.grey),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
+
+          // Clarification banner that no model file is needed
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.green.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.green.withValues(alpha: 0.3)),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.check_circle_outline, color: Color(0xFF22C55E), size: 20),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'No external model file needed! Engine A is 100% offline, self-contained, and detects pipes automatically on your device.',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Colors.white),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
 
           // Engine A Card
           Card(

@@ -1,3 +1,4 @@
+import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
@@ -42,6 +43,12 @@ class DetectionState {
   final DetectionResult? result;
   final double sizeThreshold;
 
+  // Visual & Interactive settings
+  final bool showNumbers;
+  final SizeTierMode sizeTierMode;
+  final double detectionProgress; // 0.0 to 1.0
+  final String detectionStage;
+
   // Interactive manual tool states
   final CanvasTool selectedTool;
   final PipeCategory activeAddCategory;
@@ -58,6 +65,10 @@ class DetectionState {
     this.errorMessage,
     this.result,
     this.sizeThreshold = 500.0,
+    this.showNumbers = false, // Default false: pipes visible without obstructing numbers
+    this.sizeTierMode = SizeTierMode.uniform, // Default uniform: all same size/green
+    this.detectionProgress = 0.0,
+    this.detectionStage = '',
     this.selectedTool = CanvasTool.pan,
     this.activeAddCategory = PipeCategory.small,
     this.manualAddRadius = 25.0,
@@ -78,6 +89,10 @@ class DetectionState {
     String? errorMessage,
     DetectionResult? result,
     double? sizeThreshold,
+    bool? showNumbers,
+    SizeTierMode? sizeTierMode,
+    double? detectionProgress,
+    String? detectionStage,
     CanvasTool? selectedTool,
     PipeCategory? activeAddCategory,
     double? manualAddRadius,
@@ -96,6 +111,10 @@ class DetectionState {
       errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
       result: clearResult ? null : (result ?? this.result),
       sizeThreshold: sizeThreshold ?? this.sizeThreshold,
+      showNumbers: showNumbers ?? this.showNumbers,
+      sizeTierMode: sizeTierMode ?? this.sizeTierMode,
+      detectionProgress: detectionProgress ?? this.detectionProgress,
+      detectionStage: detectionStage ?? this.detectionStage,
       selectedTool: selectedTool ?? this.selectedTool,
       activeAddCategory: activeAddCategory ?? this.activeAddCategory,
       manualAddRadius: manualAddRadius ?? this.manualAddRadius,
@@ -116,6 +135,24 @@ class DetectionNotifier extends StateNotifier<DetectionState> {
     super.dispose();
   }
 
+  // --- Display & Size Tier Controls ---
+
+  void toggleShowNumbers() {
+    state = state.copyWith(showNumbers: !state.showNumbers);
+  }
+
+  void setSizeTierMode(SizeTierMode mode) {
+    if (state.result != null) {
+      final updated = state.result!.reclassifiedWithSizeTiers(mode);
+      state = state.copyWith(
+        sizeTierMode: mode,
+        result: updated,
+      );
+    } else {
+      state = state.copyWith(sizeTierMode: mode);
+    }
+  }
+
   // --- Tool & Manual Annotation Controls ---
 
   void setSelectedTool(CanvasTool tool) {
@@ -133,7 +170,6 @@ class DetectionNotifier extends StateNotifier<DetectionState> {
   void _pushUndo() {
     final currentPipes = state.result?.pipes ?? const <PipeDetection>[];
     final newStack = List<List<PipeDetection>>.from(state.undoStack)..add(List.from(currentPipes));
-    // Keep max 20 undo steps
     if (newStack.length > 20) {
       newStack.removeAt(0);
     }
@@ -232,12 +268,17 @@ class DetectionNotifier extends StateNotifier<DetectionState> {
     );
   }
 
-  // --- Image Loading & Camera ---
+  // --- Image Loading & Camera (Background Offloaded) ---
 
-  /// Pick an image file from device storage/gallery (Cross-Platform)
   Future<void> pickImageFromGallery() async {
     try {
-      state = state.copyWith(isProcessing: true, statusMessage: 'Loading image...', clearError: true);
+      state = state.copyWith(
+        isProcessing: true,
+        detectionProgress: 0.1,
+        detectionStage: 'Selecting photo...',
+        statusMessage: 'Loading photo...',
+        clearError: true,
+      );
 
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
@@ -250,7 +291,7 @@ class DetectionNotifier extends StateNotifier<DetectionState> {
         final bytes = pickedFile.bytes;
 
         if (bytes != null) {
-          _processSelectedBytes(bytes, pickedFile.name);
+          await _processSelectedBytes(bytes, pickedFile.name);
         } else {
           state = state.copyWith(isProcessing: false);
         }
@@ -265,16 +306,22 @@ class DetectionNotifier extends StateNotifier<DetectionState> {
     }
   }
 
-  /// Take a photo using device camera (Mobile)
   Future<void> capturePhotoFromCamera() async {
     try {
-      state = state.copyWith(isProcessing: true, statusMessage: 'Opening camera...', clearError: true);
+      state = state.copyWith(
+        isProcessing: true,
+        detectionProgress: 0.1,
+        detectionStage: 'Opening camera...',
+        statusMessage: 'Opening camera...',
+        clearError: true,
+      );
+
       final picker = ImagePicker();
       final picked = await picker.pickImage(source: ImageSource.camera);
 
       if (picked != null) {
         final bytes = await picked.readAsBytes();
-        _processSelectedBytes(bytes, 'camera_capture_${DateTime.now().millisecondsSinceEpoch}.jpg');
+        await _processSelectedBytes(bytes, 'camera_capture_${DateTime.now().millisecondsSinceEpoch}.jpg');
       } else {
         state = state.copyWith(isProcessing: false);
       }
@@ -286,10 +333,24 @@ class DetectionNotifier extends StateNotifier<DetectionState> {
     }
   }
 
-  void _processSelectedBytes(Uint8List bytes, String name) {
+  Future<void> _processSelectedBytes(Uint8List bytes, String name) async {
     try {
-      final decoded = img.decodeImage(bytes);
-      if (decoded == null) {
+      state = state.copyWith(
+        isProcessing: true,
+        detectionProgress: 0.3,
+        detectionStage: 'Decoding high-resolution image...',
+        statusMessage: 'Reading image format...',
+      );
+
+      // Offload heavy image decoding to background isolate so UI thread NEVER freezes
+      _ImageDims? dims;
+      if (kIsWeb) {
+        dims = _decodeImageDimensions(bytes);
+      } else {
+        dims = await Isolate.run(() => _decodeImageDimensions(bytes));
+      }
+
+      if (dims == null) {
         state = state.copyWith(
           isProcessing: false,
           errorMessage: 'Unable to decode image file format.',
@@ -300,9 +361,11 @@ class DetectionNotifier extends StateNotifier<DetectionState> {
       state = state.copyWith(
         imageBytes: bytes,
         imageName: name,
-        imageWidth: decoded.width,
-        imageHeight: decoded.height,
+        imageWidth: dims.width,
+        imageHeight: dims.height,
         isProcessing: false,
+        detectionProgress: 0.0,
+        detectionStage: '',
         undoStack: const [],
         clearResult: true,
         clearError: true,
@@ -318,7 +381,6 @@ class DetectionNotifier extends StateNotifier<DetectionState> {
     }
   }
 
-  /// Heuristically auto-estimates radius range based on the image's short side
   void autoEstimateRadiusRange() {
     if (state.imageWidth <= 0 || state.imageHeight <= 0) return;
 
@@ -331,7 +393,7 @@ class DetectionNotifier extends StateNotifier<DetectionState> {
     state = state.copyWith(manualAddRadius: medianR);
   }
 
-  /// Runs pipe detection using the currently selected engine
+  /// Runs pipe detection using background thread with real-time percentage animation
   Future<void> runDetection() async {
     if (state.imageBytes == null) {
       state = state.copyWith(errorMessage: 'Please select or take an image first.');
@@ -349,58 +411,78 @@ class DetectionNotifier extends StateNotifier<DetectionState> {
 
     state = state.copyWith(
       isProcessing: true,
-      statusMessage: 'Detecting pipes with ${settings.engine.title}...',
+      detectionProgress: 0.15,
+      detectionStage: 'Enhancing contrast & gradients (15%)...',
+      statusMessage: 'Scanning pipe contours...',
       clearError: true,
     );
 
     try {
-      DetectionResult result;
+      DetectionResult rawResult;
 
       if (settings.engine == DetectionEngine.classicalCV) {
-        result = await ClassicalCVDetector.detect(
-          state.imageBytes!,
+        final params = _DetectionParams(
+          imageBytes: state.imageBytes!,
           sensitivity: settings.sensitivity,
           minRadius: settings.minRadius,
           maxRadius: settings.maxRadius,
           solidityThreshold: settings.solidityThreshold,
           outlierFraction: settings.outlierFraction,
         );
+
+        // Update progress indication
+        state = state.copyWith(
+          detectionProgress: 0.45,
+          detectionStage: 'Scanning pipe rims & Hough circles (45%)...',
+        );
+
+        // Run heavy CV detection in background isolate to keep 60/120 FPS UI fluid
+        if (kIsWeb) {
+          rawResult = await _runClassicalDetectionIsolate(params);
+        } else {
+          rawResult = await Isolate.run(() => _runClassicalDetectionIsolate(params));
+        }
+
+        state = state.copyWith(
+          detectionProgress: 0.85,
+          detectionStage: 'Fitting pipe diameters & classifying sizes (85%)...',
+        );
       } else {
         if (kIsWeb) {
-          throw Exception(
-            'Engine B (TFLite) runs on native mobile and desktop targets. Please use Engine A (Classical CV) in browser mode.',
-          );
+          throw Exception('Engine B runs on native targets. Please use Engine A in browser.');
         }
-
         if (settings.customModelPath == null) {
-          throw Exception(
-            'No custom TFLite model imported. Please go to Settings and import a fine-tuned pipe model (.tflite), or switch to Engine A.',
-          );
+          throw Exception('No custom model imported. Built-in Engine A works offline.');
         }
-
         if (!_tfliteDetector.isModelLoaded || _tfliteDetector.loadedModelPath != settings.customModelPath) {
           await _tfliteDetector.loadModel(settings.customModelPath!);
         }
-
-        result = await _tfliteDetector.detect(
+        rawResult = await _tfliteDetector.detect(
           state.imageBytes!,
           confidenceThreshold: settings.sensitivity,
           solidityThreshold: settings.solidityThreshold,
         );
       }
 
+      // Apply selected size tier mode (Uniform / 2 Types / 3 Types / Auto)
+      final result = rawResult.reclassifiedWithSizeTiers(state.sizeTierMode);
+
       if (result.pipes.isEmpty) {
         state = state.copyWith(
           isProcessing: false,
+          detectionProgress: 1.0,
+          detectionStage: 'Complete',
           result: result,
-          errorMessage: 'No pipe openings detected automatically. You can adjust Min/Max radius or use the [Add Pipe] tool to mark pipes manually!',
+          errorMessage: 'No pipe openings detected automatically. You can use the [Add Pipe] tool to mark pipes manually!',
         );
       } else {
-        // Update default manual add radius to match detected pipes' average radius
-        final avgDetectedRadius = result.pipes.map((p) => p.averageRadius).reduce((a, b) => a + b) / result.pipes.length;
+        final avgDetectedRadius =
+            result.pipes.map((p) => p.averageRadius).reduce((a, b) => a + b) / result.pipes.length;
 
         state = state.copyWith(
           isProcessing: false,
+          detectionProgress: 1.0,
+          detectionStage: 'Complete',
           result: result,
           sizeThreshold: result.currentThreshold,
           manualAddRadius: avgDetectedRadius.roundToDouble(),
@@ -410,12 +492,13 @@ class DetectionNotifier extends StateNotifier<DetectionState> {
     } catch (e) {
       state = state.copyWith(
         isProcessing: false,
+        detectionProgress: 0.0,
+        detectionStage: '',
         errorMessage: 'Detection failed: $e',
       );
     }
   }
 
-  /// Instantly reclassifies detected pipes in memory when the threshold slider moves
   void updateThreshold(double newThreshold) {
     if (state.result == null) return;
     final updatedResult = state.result!.reclassifiedWithThreshold(newThreshold);
@@ -433,3 +516,46 @@ class DetectionNotifier extends StateNotifier<DetectionState> {
 final detectionProvider = StateNotifierProvider<DetectionNotifier, DetectionState>((ref) {
   return DetectionNotifier(ref);
 });
+
+// --- Background Isolate Helpers ---
+
+class _DetectionParams {
+  final Uint8List imageBytes;
+  final double sensitivity;
+  final double minRadius;
+  final double maxRadius;
+  final double solidityThreshold;
+  final double outlierFraction;
+
+  _DetectionParams({
+    required this.imageBytes,
+    required this.sensitivity,
+    required this.minRadius,
+    required this.maxRadius,
+    required this.solidityThreshold,
+    required this.outlierFraction,
+  });
+}
+
+Future<DetectionResult> _runClassicalDetectionIsolate(_DetectionParams params) {
+  return ClassicalCVDetector.detect(
+    params.imageBytes,
+    sensitivity: params.sensitivity,
+    minRadius: params.minRadius,
+    maxRadius: params.maxRadius,
+    solidityThreshold: params.solidityThreshold,
+    outlierFraction: params.outlierFraction,
+  );
+}
+
+class _ImageDims {
+  final int width;
+  final int height;
+  _ImageDims(this.width, this.height);
+}
+
+_ImageDims? _decodeImageDimensions(Uint8List bytes) {
+  final decoded = img.decodeImage(bytes);
+  if (decoded == null) return null;
+  return _ImageDims(decoded.width, decoded.height);
+}

@@ -215,6 +215,7 @@ class HomeScreen extends ConsumerWidget {
       imageWidth: state.imageWidth,
       imageHeight: state.imageHeight,
       detections: state.result?.pipes ?? const [],
+      showLabels: state.showNumbers,
     );
   }
 
@@ -342,6 +343,58 @@ class HomeScreen extends ConsumerWidget {
           onChanged: (val) {
             settingsNotifier.setSensitivity(val);
           },
+        ),
+
+        // Size Tier Selector (Uniform, 2 Types, 3 Types, Auto) matching Desktop
+        Card(
+          elevation: 1,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          child: Padding(
+            padding: const EdgeInsets.all(12.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Row(
+                  children: [
+                    Icon(Icons.palette_outlined, size: 16, color: Colors.grey),
+                    SizedBox(width: 6),
+                    Text(
+                      'PIPE SIZE COLOR TIERS',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8, color: Colors.grey),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: SizeTierMode.values.map((mode) {
+                    final isSelected = detectionState.sizeTierMode == mode;
+                    return ChoiceChip(
+                      label: Text(mode.shortLabel),
+                      selected: isSelected,
+                      onSelected: (_) {
+                        detectionNotifier.setSizeTierMode(mode);
+                      },
+                      avatar: isSelected ? const Icon(Icons.check, size: 14) : null,
+                      visualDensity: VisualDensity.compact,
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  detectionState.sizeTierMode == SizeTierMode.uniform
+                      ? '🟢 All pipes marked same size (Green). Perfect for uniform pipe bundles.'
+                      : (detectionState.sizeTierMode == SizeTierMode.twoSizes
+                          ? '🟢🔴 Split into 2 size types (Small Green / Large Red).'
+                          : (detectionState.sizeTierMode == SizeTierMode.threeSizes
+                              ? '🟢🟡🔴 Split into 3 size types (Green / Yellow / Red).'
+                              : '⚡ Automatically detects if bundle is uniform or mixed.')),
+                  style: const TextStyle(fontSize: 11, color: Colors.grey),
+                ),
+              ],
+            ),
+          ),
         ),
 
         const SizedBox(height: 14),

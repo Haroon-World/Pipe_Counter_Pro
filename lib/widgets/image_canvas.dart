@@ -18,15 +18,32 @@ class ImageCanvasWidget extends ConsumerStatefulWidget {
     required this.imageWidth,
     required this.imageHeight,
     required this.detections,
-    this.showLabels = true,
+    this.showLabels = false,
   });
 
   @override
   ConsumerState<ImageCanvasWidget> createState() => _ImageCanvasWidgetState();
 }
 
-class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> {
+class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> with SingleTickerProviderStateMixin {
   final TransformationController _transformController = TransformationController();
+  late final AnimationController _scanAnimController;
+
+  @override
+  void initState() {
+    super.initState();
+    _scanAnimController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1800),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _scanAnimController.dispose();
+    _transformController.dispose();
+    super.dispose();
+  }
 
   void _resetZoom() {
     _transformController.value = Matrix4.identity();
@@ -151,11 +168,11 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> {
                 const SizedBox(height: 8),
                 Row(
                   children: [
-                    _buildColorOption(ctx, notifier, pipe, PipeCategory.small, '🟢 Small (Green)', const Color(0xFF22C55E)),
+                    _buildColorOption(ctx, notifier, pipe, PipeCategory.small, '🟢 Small', const Color(0xFF22C55E)),
                     const SizedBox(width: 8),
-                    _buildColorOption(ctx, notifier, pipe, PipeCategory.medium, '🟡 Medium (Yellow)', const Color(0xFFEAB308)),
+                    _buildColorOption(ctx, notifier, pipe, PipeCategory.medium, '🟡 Medium', const Color(0xFFEAB308)),
                     const SizedBox(width: 8),
-                    _buildColorOption(ctx, notifier, pipe, PipeCategory.large, '🔴 Large (Red)', const Color(0xFFEF4444)),
+                    _buildColorOption(ctx, notifier, pipe, PipeCategory.large, '🔴 Large', const Color(0xFFEF4444)),
                   ],
                 ),
                 const Divider(height: 28, color: Colors.white24),
@@ -231,7 +248,7 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> {
               ),
               const SizedBox(height: 4),
               Text(
-                cat == PipeCategory.small ? 'Small' : (cat == PipeCategory.medium ? 'Medium' : 'Large'),
+                label,
                 style: TextStyle(
                   fontSize: 11,
                   fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
@@ -294,14 +311,14 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> {
                         filterQuality: FilterQuality.medium,
                       ),
 
-                      // Ellipse & dot overlay
+                      // Ellipse & dot overlay (shows numbers ONLY if state.showNumbers is true)
                       CustomPaint(
                         painter: PipeOverlayPainter(
                           imageWidth: widget.imageWidth,
                           imageHeight: widget.imageHeight,
                           detections: widget.detections,
                           scale: scale,
-                          showLabels: widget.showLabels,
+                          showLabels: state.showNumbers,
                         ),
                       ),
 
@@ -310,18 +327,110 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> {
                         child: GestureDetector(
                           behavior: HitTestBehavior.opaque,
                           onTapUp: (details) {
-                            _handleImageTap(details.localPosition, scale);
+                            if (!state.isProcessing) {
+                              _handleImageTap(details.localPosition, scale);
+                            }
                           },
                           onLongPressStart: (details) {
-                            _handlePipeLongPress(details.localPosition, scale);
+                            if (!state.isProcessing) {
+                              _handlePipeLongPress(details.localPosition, scale);
+                            }
                           },
                         ),
                       ),
+
+                      // Scanning laser beam during detection
+                      if (state.isProcessing)
+                        AnimatedBuilder(
+                          animation: _scanAnimController,
+                          builder: (context, child) {
+                            return Positioned(
+                              top: _scanAnimController.value * renderedH,
+                              left: 0,
+                              right: 0,
+                              child: Container(
+                                height: 3,
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [
+                                      Colors.cyanAccent.withValues(alpha: 0.0),
+                                      Colors.cyanAccent,
+                                      Colors.cyanAccent.withValues(alpha: 0.0),
+                                    ],
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.cyanAccent.withValues(alpha: 0.8),
+                                      blurRadius: 10,
+                                      spreadRadius: 2,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
                     ],
                   ),
                 ),
               ),
             ),
+
+            // Scanning progress overlay card in center
+            if (state.isProcessing)
+              Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                  margin: const EdgeInsets.symmetric(horizontal: 28),
+                  decoration: BoxDecoration(
+                    color: const Color(0xEE1E222A),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: Colors.cyanAccent.withValues(alpha: 0.6), width: 1.5),
+                    boxShadow: const [
+                      BoxShadow(color: Colors.black87, blurRadius: 20, offset: Offset(0, 6)),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.5,
+                              valueColor: AlwaysStoppedAnimation(Colors.cyanAccent),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Text(
+                            'AI Counting Pipes (${(state.detectionProgress * 100).toInt()}%)',
+                            style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(6),
+                        child: LinearProgressIndicator(
+                          value: state.detectionProgress > 0 ? state.detectionProgress : null,
+                          minHeight: 6,
+                          backgroundColor: Colors.white12,
+                          valueColor: const AlwaysStoppedAnimation(Colors.cyanAccent),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        state.detectionStage.isNotEmpty ? state.detectionStage : 'Analyzing pipe contours...',
+                        style: const TextStyle(color: Colors.white70, fontSize: 11),
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
 
             // Top Toolbar: Interactive Editing Mode Selector (matching desktop navbar pill)
             Positioned(
@@ -329,11 +438,11 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> {
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
                 decoration: BoxDecoration(
-                  color: const Color(0xDD1E222A),
+                  color: const Color(0xEE1E222A),
                   borderRadius: BorderRadius.circular(24),
                   border: Border.all(color: Colors.white24),
                   boxShadow: const [
-                    BoxShadow(color: Colors.black45, blurRadius: 8, offset: Offset(0, 3)),
+                    BoxShadow(color: Colors.black54, blurRadius: 10, offset: Offset(0, 3)),
                   ],
                 ),
                 child: Row(
@@ -370,13 +479,45 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> {
                       label: 'Toggle',
                       onPressed: () => notifier.setSelectedTool(CanvasTool.select),
                     ),
+                    // Toggle Numbers Button (Default OFF so pipes are 100% visible)
+                    Container(width: 1, height: 20, color: Colors.white24, margin: const EdgeInsets.symmetric(horizontal: 4)),
+                    InkWell(
+                      onTap: () => notifier.toggleShowNumbers(),
+                      borderRadius: BorderRadius.circular(16),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: state.showNumbers ? Colors.cyanAccent.withValues(alpha: 0.25) : Colors.transparent,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.pin_outlined,
+                              size: 14,
+                              color: state.showNumbers ? Colors.cyanAccent : Colors.white60,
+                            ),
+                            const SizedBox(width: 3),
+                            Text(
+                              state.showNumbers ? '# ON' : '# OFF',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: state.showNumbers ? FontWeight.bold : FontWeight.normal,
+                                color: state.showNumbers ? Colors.cyanAccent : Colors.white60,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                     if (state.canUndo) ...[
                       Container(width: 1, height: 20, color: Colors.white24, margin: const EdgeInsets.symmetric(horizontal: 4)),
                       IconButton(
                         icon: const Icon(Icons.undo, color: Colors.white, size: 18),
                         tooltip: 'Undo Last Action',
                         onPressed: () => notifier.undo(),
-                        constraints: const BoxConstraints(minWidth: 36, minHeight: 32),
+                        constraints: const BoxConstraints(minWidth: 34, minHeight: 32),
                         padding: EdgeInsets.zero,
                       ),
                     ],
@@ -432,13 +573,13 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> {
               ),
 
             // Mode hint indicator banner
-            if (state.selectedTool != CanvasTool.pan)
+            if (state.selectedTool != CanvasTool.pan && !state.isProcessing)
               Positioned(
-                bottom: 64,
+                bottom: 60,
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
                   decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.8),
+                    color: Colors.black.withValues(alpha: 0.85),
                     borderRadius: BorderRadius.circular(16),
                     border: Border.all(color: Colors.white24),
                   ),
@@ -588,7 +729,7 @@ class PipeOverlayPainter extends CustomPainter {
   final int imageHeight;
   final List<PipeDetection> detections;
   final double scale;
-  final bool showLabels;
+  final bool showLabels; // When false: NO numbers are painted at all!
 
   PipeOverlayPainter({
     required this.imageWidth,
@@ -633,9 +774,9 @@ class PipeOverlayPainter extends CustomPainter {
       );
 
       if (pipe.isSelected) {
-        // Active / Counted pipe
+        // Active / Counted pipe: Clear, crisp circular outline with no obstructing numbers
         final fillPaint = Paint()
-          ..color = baseColor.withValues(alpha: 0.14)
+          ..color = baseColor.withValues(alpha: 0.12)
           ..style = PaintingStyle.fill;
 
         final outlinePaint = Paint()
@@ -673,7 +814,7 @@ class PipeOverlayPainter extends CustomPainter {
 
       canvas.restore();
 
-      // Draw Pipe ID Badge (#1, #2...)
+      // Draw Pipe ID Badge (#1, #2...) ONLY if showLabels is explicitly enabled
       if (showLabels && scale >= 0.20 && pipe.isSelected) {
         final textPainter = TextPainter(
           text: TextSpan(
