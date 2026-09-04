@@ -25,9 +25,11 @@ class ImageCanvasWidget extends ConsumerStatefulWidget {
   ConsumerState<ImageCanvasWidget> createState() => _ImageCanvasWidgetState();
 }
 
-class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> with SingleTickerProviderStateMixin {
+class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> with TickerProviderStateMixin {
   final TransformationController _transformController = TransformationController();
   late final AnimationController _scanAnimController;
+  late final AnimationController _progressAnimController;
+  bool _showProgressCard = false;
 
   @override
   void initState() {
@@ -36,13 +38,28 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> with Sing
       vsync: this,
       duration: const Duration(milliseconds: 1800),
     )..repeat(reverse: true);
+
+    _progressAnimController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2200),
+    );
   }
 
   @override
   void dispose() {
     _scanAnimController.dispose();
+    _progressAnimController.dispose();
     _transformController.dispose();
     super.dispose();
+  }
+
+  String _getDynamicStageText(int pct) {
+    if (pct >= 100) return 'Detection Complete!';
+    if (pct >= 85) return 'Eliminating duplicates & finalizing counts ($pct%)...';
+    if (pct >= 60) return 'Fitting pipe diameters & verifying rims ($pct%)...';
+    if (pct >= 35) return 'Scanning pipe centers & inner hollows ($pct%)...';
+    if (pct >= 12) return 'Detecting pipe edges & gradient fields ($pct%)...';
+    return 'Enhancing contrast & color channels ($pct%)...';
   }
 
   void _resetZoom() {
@@ -264,6 +281,36 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> with Sing
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<bool>(
+      detectionProvider.select((s) => s.isProcessing),
+      (prev, isProcessing) {
+        if (isProcessing) {
+          setState(() {
+            _showProgressCard = true;
+          });
+          _progressAnimController.reset();
+          _progressAnimController.animateTo(
+            0.95,
+            duration: const Duration(milliseconds: 2200),
+            curve: Curves.easeOutCubic,
+          );
+        } else if (prev == true && !isProcessing) {
+          _progressAnimController.animateTo(
+            1.0,
+            duration: const Duration(milliseconds: 280),
+            curve: Curves.easeOut,
+          ).then((_) async {
+            await Future.delayed(const Duration(milliseconds: 400));
+            if (mounted) {
+              setState(() {
+                _showProgressCard = false;
+              });
+            }
+          });
+        }
+      },
+    );
+
     final state = ref.watch(detectionProvider);
     final notifier = ref.read(detectionProvider.notifier);
 
@@ -339,13 +386,13 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> with Sing
                         ),
                       ),
 
-                      // Scanning laser beam during detection
-                      if (state.isProcessing)
+                      // Real-time synchronized laser scanning beam
+                      if (_showProgressCard)
                         AnimatedBuilder(
-                          animation: _scanAnimController,
+                          animation: _progressAnimController,
                           builder: (context, child) {
                             return Positioned(
-                              top: _scanAnimController.value * renderedH,
+                              top: _progressAnimController.value * renderedH,
                               left: 0,
                               right: 0,
                               child: Container(
@@ -376,60 +423,74 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> with Sing
               ),
             ),
 
-            // Scanning progress overlay card in center
-            if (state.isProcessing)
-              Center(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                  margin: const EdgeInsets.symmetric(horizontal: 28),
-                  decoration: BoxDecoration(
-                    color: const Color(0xEE1E222A),
-                    borderRadius: BorderRadius.circular(18),
-                    border: Border.all(color: Colors.cyanAccent.withValues(alpha: 0.6), width: 1.5),
-                    boxShadow: const [
-                      BoxShadow(color: Colors.black87, blurRadius: 20, offset: Offset(0, 6)),
-                    ],
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Row(
+            // Real-time 0% to 100% scanning progress card in center
+            if (_showProgressCard)
+              AnimatedBuilder(
+                animation: _progressAnimController,
+                builder: (context, child) {
+                  final pct = (_progressAnimController.value * 100).clamp(0, 100).toInt();
+                  final isDone = pct >= 100;
+                  return Center(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                      margin: const EdgeInsets.symmetric(horizontal: 28),
+                      decoration: BoxDecoration(
+                        color: const Color(0xEE1E222A),
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(
+                          color: (isDone ? Colors.greenAccent : Colors.cyanAccent).withValues(alpha: 0.7),
+                          width: 1.5,
+                        ),
+                        boxShadow: const [
+                          BoxShadow(color: Colors.black87, blurRadius: 20, offset: Offset(0, 6)),
+                        ],
+                      ),
+                      child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2.5,
-                              valueColor: AlwaysStoppedAnimation(Colors.cyanAccent),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SizedBox(
+                                width: 22,
+                                height: 22,
+                                child: isDone
+                                    ? const Icon(Icons.check_circle, color: Colors.greenAccent, size: 22)
+                                    : const CircularProgressIndicator(
+                                        strokeWidth: 2.5,
+                                        valueColor: AlwaysStoppedAnimation(Colors.cyanAccent),
+                                      ),
+                              ),
+                              const SizedBox(width: 12),
+                              Text(
+                                isDone ? 'AI Counting Pipes: Complete (100%)' : 'AI Counting Pipes ($pct%)',
+                                style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(6),
+                            child: LinearProgressIndicator(
+                              value: _progressAnimController.value,
+                              minHeight: 6,
+                              backgroundColor: Colors.white12,
+                              valueColor: AlwaysStoppedAnimation(
+                                isDone ? Colors.greenAccent : Colors.cyanAccent,
+                              ),
                             ),
                           ),
-                          const SizedBox(width: 12),
+                          const SizedBox(height: 8),
                           Text(
-                            'AI Counting Pipes (${(state.detectionProgress * 100).toInt()}%)',
-                            style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+                            _getDynamicStageText(pct),
+                            style: const TextStyle(color: Colors.white70, fontSize: 11),
+                            textAlign: TextAlign.center,
                           ),
                         ],
                       ),
-                      const SizedBox(height: 12),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(6),
-                        child: LinearProgressIndicator(
-                          value: state.detectionProgress > 0 ? state.detectionProgress : null,
-                          minHeight: 6,
-                          backgroundColor: Colors.white12,
-                          valueColor: const AlwaysStoppedAnimation(Colors.cyanAccent),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        state.detectionStage.isNotEmpty ? state.detectionStage : 'Analyzing pipe contours...',
-                        style: const TextStyle(color: Colors.white70, fontSize: 11),
-                        textAlign: TextAlign.center,
-                      ),
-                    ],
-                  ),
-                ),
+                    ),
+                  );
+                },
               ),
 
             // Top Toolbar: Interactive Editing Mode Selector (matching desktop navbar pill)
@@ -774,29 +835,23 @@ class PipeOverlayPainter extends CustomPainter {
       );
 
       if (pipe.isSelected) {
-        // Active / Counted pipe: Clear, crisp circular outline with no obstructing numbers
-        final fillPaint = Paint()
-          ..color = baseColor.withValues(alpha: 0.12)
-          ..style = PaintingStyle.fill;
-
+        // Ultra-thin, crisp 1.2px outline so the real pipe rim and wall edges remain 100% visible
         final outlinePaint = Paint()
           ..color = baseColor
           ..style = PaintingStyle.stroke
-          ..strokeWidth = math.max(1.8, 2.2 * scale).clamp(1.8, 4.0)
+          ..strokeWidth = math.max(1.0, 1.2 * scale).clamp(1.0, 1.6)
           ..isAntiAlias = true;
 
-        canvas.drawOval(ellipseRect, fillPaint);
         canvas.drawOval(ellipseRect, outlinePaint);
 
-        // Center dot with dark halo
-        canvas.drawCircle(Offset.zero, 3.5, Paint()..color = Colors.black87);
-        canvas.drawCircle(Offset.zero, 2.5, Paint()..color = baseColor);
+        // Subtle center dot (1.8px) with no heavy tint
+        canvas.drawCircle(Offset.zero, 1.8, Paint()..color = baseColor);
       } else {
-        // Excluded / Deselected pipe (Muted dashed outline with red X)
+        // Excluded / Deselected pipe (Thin muted dashed outline with small red X)
         final excludedPaint = Paint()
-          ..color = Colors.grey.withValues(alpha: 0.5)
+          ..color = Colors.grey.withValues(alpha: 0.4)
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.6
+          ..strokeWidth = 1.0
           ..isAntiAlias = true;
 
         canvas.drawOval(ellipseRect, excludedPaint);

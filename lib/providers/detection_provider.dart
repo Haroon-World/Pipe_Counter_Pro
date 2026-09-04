@@ -384,9 +384,17 @@ class DetectionNotifier extends StateNotifier<DetectionState> {
   void autoEstimateRadiusRange() {
     if (state.imageWidth <= 0 || state.imageHeight <= 0) return;
 
+    // If the user or app already has a calibrated pipe radius (e.g. 4 - 32 px), preserve it
+    final currentSettings = ref.read(settingsProvider);
+    if (currentSettings.minRadius >= 4.0 && currentSettings.maxRadius <= 45.0) {
+      final medianR = ((currentSettings.minRadius + currentSettings.maxRadius) / 2.0).roundToDouble();
+      state = state.copyWith(manualAddRadius: medianR);
+      return;
+    }
+
     final shortSide = math.min(state.imageWidth, state.imageHeight);
-    final minR = math.max(8.0, (shortSide * 0.015).roundToDouble());
-    final maxR = math.max(minR + 15.0, (shortSide * 0.080).roundToDouble());
+    final minR = (shortSide * 0.005).roundToDouble().clamp(4.0, 10.0);
+    final maxR = (shortSide * 0.025).roundToDouble().clamp(minR + 8.0, 32.0);
     final medianR = ((minR + maxR) / 2.0).roundToDouble();
 
     ref.read(settingsProvider.notifier).setRadiusRange(minR, maxR);

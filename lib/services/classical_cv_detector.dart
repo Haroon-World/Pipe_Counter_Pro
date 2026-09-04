@@ -20,8 +20,8 @@ class ClassicalCVDetector {
   static Future<DetectionResult> detect(
     Uint8List imageBytes, {
     double sensitivity = 0.50, // 0.10 to 0.90
-    double minRadius = 8.0,
-    double maxRadius = 65.0,
+    double minRadius = 4.0,
+    double maxRadius = 32.0,
     double solidityThreshold = 0.85,
     double outlierFraction = 0.12,
     double? initialThreshold,
@@ -86,14 +86,36 @@ class ClassicalCVDetector {
         continue;
       }
 
+      // Local center refinement: lock candidate center into the hollow luminance minimum
+      int bestX = c.cx.round();
+      int bestY = c.cy.round();
+      int minLum = 255;
+      final searchR = math.max(1, (c.radius * 0.25).round());
+      for (int dy = -searchR; dy <= searchR; dy++) {
+        for (int dx = -searchR; dx <= searchR; dx++) {
+          final px = (c.cx + dx).round();
+          final py = (c.cy + dy).round();
+          if (px >= 0 && px < procW && py >= 0 && py < procH) {
+            final lum = gray[py * procW + px];
+            if (lum < minLum) {
+              minLum = lum;
+              bestX = px;
+              bestY = py;
+            }
+          }
+        }
+      }
+      final refinedCx = bestX.toDouble();
+      final refinedCy = bestY.toDouble();
+
       // Sample core intensity inside the hollow
       double coreSum = 0;
       int coreCount = 0;
       final coreR = math.max(2, (c.radius * 0.25).round());
       for (int dy = -coreR; dy <= coreR; dy++) {
         for (int dx = -coreR; dx <= coreR; dx++) {
-          final px = (c.cx + dx).round();
-          final py = (c.cy + dy).round();
+          final px = (refinedCx + dx).round();
+          final py = (refinedCy + dy).round();
           if (px >= 0 && px < procW && py >= 0 && py < procH) {
             coreSum += gray[py * procW + px];
             coreCount++;
@@ -119,10 +141,10 @@ class ClassicalCVDetector {
         double bestRimLum = 0;
 
         for (double r = rSearchMin; r <= rSearchMax; r += 1.0) {
-          final x1 = (c.cx + (r - 2) * cosA).round();
-          final y1 = (c.cy + (r - 2) * sinA).round();
-          final x2 = (c.cx + (r + 2) * cosA).round();
-          final y2 = (c.cy + (r + 2) * sinA).round();
+          final x1 = (refinedCx + (r - 2) * cosA).round();
+          final y1 = (refinedCy + (r - 2) * sinA).round();
+          final x2 = (refinedCx + (r + 2) * cosA).round();
+          final y2 = (refinedCy + (r + 2) * sinA).round();
 
           if (x1 < 0 || x1 >= procW || y1 < 0 || y1 >= procH || x2 < 0 || x2 >= procW || y2 < 0 || y2 >= procH) {
             continue;
@@ -141,7 +163,7 @@ class ClassicalCVDetector {
 
         if (maxGrad >= 4.0 && bestR >= scaledMinR * 0.60 && bestR <= scaledMaxR * 1.35) {
           quadrantRays[quad]++;
-          boundaryPoints.add(math.Point(c.cx + bestR * cosA, c.cy + bestR * sinA));
+          boundaryPoints.add(math.Point(refinedCx + bestR * cosA, refinedCy + bestR * sinA));
           rayAngles.add(angle);
           rayRadii.add(bestR);
           rimLumSum += bestRimLum;
@@ -151,8 +173,6 @@ class ClassicalCVDetector {
       // Enclosure check: boundary must exist in at least 2 of 4 quadrants, with >= 8 points
       final quadsWithEdges = quadrantRays.where((count) => count >= 1).length;
       if (quadsWithEdges < 2 || boundaryPoints.length < 8) {
-        // Fallback to Hough circle itself if ray tracing is ambiguous
-        _addHoughFallback(validatedPipes, c, scaleFactor);
         continue;
       }
 
@@ -164,7 +184,6 @@ class ClassicalCVDetector {
         if (gap > maxAngularGap) maxAngularGap = gap;
       }
       if (maxAngularGap > (160.0 * math.pi / 180.0)) {
-        _addHoughFallback(validatedPipes, c, scaleFactor);
         continue;
       }
 
@@ -177,14 +196,12 @@ class ClassicalCVDetector {
       final stdR = math.sqrt(varSum / rayRadii.length);
       final radialCV = stdR / meanR;
       if (radialCV > 0.45) {
-        _addHoughFallback(validatedPipes, c, scaleFactor);
         continue;
       }
 
       // Fit ellipse to boundary points
       final fitted = EllipseFitService.fit(boundaryPoints);
       if (fitted == null || !fitted.isValid) {
-        _addHoughFallback(validatedPipes, c, scaleFactor);
         continue;
       }
 
@@ -192,14 +209,12 @@ class ClassicalCVDetector {
       final major = math.max(fitted.width, fitted.height);
       final minor = math.min(fitted.width, fitted.height);
       if (minor <= 0 || (major / minor) > 2.2) {
-        _addHoughFallback(validatedPipes, c, scaleFactor);
         continue;
       }
 
       // Solidity check
       final solidity = GeometryUtils.calculateSolidity(boundaryPoints);
       if (solidity < solidityThreshold * 0.85) {
-        _addHoughFallback(validatedPipes, c, scaleFactor);
         continue;
       }
 
@@ -253,7 +268,7 @@ class ClassicalCVDetector {
         final dist = math.sqrt(dx * dx + dy * dy);
         final avgR = (p.averageRadius + existing.averageRadius) / 2.0;
 
-        if (dist < avgR * 1.05) {
+        if (dist < avgR * 0.85) {
           isDuplicate = true;
           break;
         }

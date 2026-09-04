@@ -1,4 +1,4 @@
-﻿import 'package:shared_preferences/shared_preferences.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/app_settings.dart';
 
 class StorageService {
@@ -21,8 +21,8 @@ class StorageService {
     );
 
     final sensitivity = prefs.getDouble(_keySensitivity) ?? 0.50;
-    final minRadius = prefs.getDouble(_keyMinRadius) ?? 8.0;
-    final maxRadius = prefs.getDouble(_keyMaxRadius) ?? 65.0;
+    final minRadius = prefs.getDouble(_keyMinRadius) ?? 4.0;
+    final maxRadius = prefs.getDouble(_keyMaxRadius) ?? 32.0;
     final solidityThreshold = prefs.getDouble(_keySolidityThreshold) ?? 0.85;
     final outlierFraction = prefs.getDouble(_keyOutlierFraction) ?? 0.12;
     final modelPath = prefs.getString(_keyModelPath);
