@@ -1,4 +1,4 @@
-import 'dart:math' as math;
+﻿import 'dart:math' as math;
 import 'dart:typed_data';
 
 class HoughCircle {
@@ -212,7 +212,7 @@ class HoughCircleDetector {
         final dist = math.sqrt(dx * dx + dy * dy);
         final avgR = (cand.radius + existing.radius) / 2.0;
 
-        if (dist < avgR * 0.70) {
+        if (dist < avgR * 0.50) {
           isDupe = true;
           break;
         }
