@@ -1,4 +1,4 @@
-﻿name: pipe_counter_pro
+name: pipe_counter_pro
 description: "Cross-Platform Pipe Counter Application with Classical CV and TFLite ML engines."
 publish_to: 'none'
 
@@ -31,8 +31,6 @@ dependencies:
   path_provider: ^2.1.5
   shared_preferences: ^2.3.5
 
-  # Optional On-device ML
-  tflite_flutter: ^0.11.0
 
   # UI icons and utilities
   cupertino_icons: ^1.0.8
