@@ -3,13 +3,10 @@ name: Build & Release Android APK
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
-    paths:
-      - 'lib/**'
-      - 'android/**'
-      - 'pubspec.yaml'
-      - '.github/workflows/build_android_apk.yml'
 
 permissions:
   contents: write
