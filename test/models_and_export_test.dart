@@ -1,4 +1,4 @@
-﻿import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_test/flutter_test.dart';
 import 'package:pipe_counter_pro/models/pipe_detection.dart';
 import 'package:pipe_counter_pro/services/export_service.dart';
 
@@ -94,11 +94,11 @@ void main() {
     test('generateExcel produces non-empty byte buffer', () {
       const result = DetectionResult(
         pipes: [
-          const PipeDetection(id: 1, cx: 50, cy: 50, width: 20, height: 20, angle: 0, area: 314.0, solidity: 0.94),
+          PipeDetection(id: 1, cx: 50, cy: 50, width: 20, height: 20, angle: 0, area: 314.0, solidity: 0.94),
         ],
         imageWidth: 640,
         imageHeight: 480,
-        processingTime: const Duration(milliseconds: 40),
+        processingTime: Duration(milliseconds: 40),
         engineName: 'Engine A',
         currentThreshold: 500.0,
       );
