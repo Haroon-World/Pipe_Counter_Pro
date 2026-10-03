@@ -163,6 +163,27 @@ Pipe_Counter_Pro/
 
 ---
 
-## 📄 License
+## 📸 Visual Showcase & Detection Gallery
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+| Industrial Bundle Test Sample | Dense Stacking Detection |
+| :---: | :---: |
+| ![Sample Pipe Bundle](assets/sample_pipes.png) | ![Industrial Stacking Test](assets/real_pipes_test.jpg) |
+| *Synthetic & Real Stacking Proposal Validation* | *High-Density Optical Pipe Identification* |
+
+---
+
+## 📄 License & Compliance
+
+This software application is released under the [MIT License](LICENSE). 
+
+> **Licensing Notice:** This project integrates with the [Ultralytics YOLOv8](https://github.com/ultralytics/ultralytics) framework, which is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)** for open-source use. If modifying or distributing derivative models or applications that link directly with Ultralytics, please ensure full compliance with AGPL-3.0 terms or acquire an Ultralytics enterprise license.
+
+---
+
+## 👨‍💻 Author & Contact
+
+**Muhammad Haroon Siddique**  
+AI & Software Engineer | Top Position, Arfa Karim Fellowship Program 2026  
+- **LinkedIn**: [linkedin.com/in/muhammad-haroon-engr](https://www.linkedin.com/in/muhammad-haroon-engr)  
+- **GitHub**: [@Haroon-World](https://github.com/Haroon-World)
+

@@ -65,3 +65,11 @@ Thumbs.db
 *.key
 *.cert
 credentials.json
+
+# Local Automation & Session Caches (Never Commit)
+.linkedin_session/
+.linkedin_chrome/
+.test_session/
+linkedin_bridge.py
+Link_LinkedIn.bat
+post_content.txt
