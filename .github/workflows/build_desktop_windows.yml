@@ -76,7 +76,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ (startsWith(github.ref, 'refs/tags/v') && github.ref_name) || github.event.inputs.release_tag || 'v2.0.0' }}
-          name: Release ${{ (startsWith(github.ref, 'refs/tags/v') && github.ref_name) || github.event.inputs.release_tag || 'v2.0.0' }}
+          name: "Pipe Counter Pro v2.0.0 — Intelligent Multi-Scale Vision Suite"
+          body_path: RELEASE_NOTES.md
           files: dist_installer/PipeCounterPro_v2.0.0_Setup.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

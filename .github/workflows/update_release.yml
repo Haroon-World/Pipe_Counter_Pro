@@ -1,0 +1,35 @@
+name: Publish Release Notes
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'RELEASE_NOTES.md'
+      - '.github/workflows/update_release.yml'
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  publish-release:
+    name: Publish Release Notes to GitHub Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: "Step 1 - Checkout repository"
+        uses: actions/checkout@v4
+
+      - name: "Step 2 - Update GitHub Release v2.0.0"
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v2.0.0
+          name: "Pipe Counter Pro v2.0.0 — Intelligent Multi-Scale Vision Suite"
+          body_path: RELEASE_NOTES.md
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
