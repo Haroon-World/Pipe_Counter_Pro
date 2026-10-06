@@ -11,10 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Concentric & Nested Pipe Detection**: Ability to detect and differentiate smaller pipes inserted inside larger outer pipes/sleeves.
+- **Partially Occluded & Stacked Pipe Detection**: Sub-pixel RANSAC arc curvature reconstruction to restore true circular diameters from as little as 25% visible arcs, and recover background pipes hidden behind foreground pipes.
 - **Auto Pipe Radius Calibration**: Adaptive scale-space/distance transform analysis to automatically detect pipe radius bounds from the image, preserving full manual slider adjustments.
 - **Auto Edge Sensitivity**: Image contrast and gradient SNR noise floor analysis for automated edge sensitivity tuning, with manual slider override.
 - **Auto Multi-Size Discovery & Live Split Ruler Snapping**: Automatic bimodal/trimodal clustering of pipe diameters that automatically snaps the Size Split Ruler to the optimal mathematical valley.
 - **Interactive Image Cropping & ROI Tool**: 8-point interactive cropping viewport to cut out unwanted warehouse/yard background before or during pipe counting.
+- **Modern Obsidian Dark UI**: Deep obsidian `#0b0f19` aesthetic with electric cyan hero cards, glassmorphic styling, and lavender halos on reconstructed partial pipes.
 
 ---
 
