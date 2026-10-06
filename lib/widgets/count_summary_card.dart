@@ -29,9 +29,39 @@ class CountSummaryCard extends StatelessWidget {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      'Pipe Count Summary',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    Row(
+                      children: [
+                        const Text(
+                          'Pipe Count Summary',
+                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                        ),
+                        if (result != null && result!.nestedCount > 0) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF38BDF8).withValues(alpha: 0.18),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: const Color(0xFF38BDF8).withValues(alpha: 0.4)),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.layers_outlined, size: 12, color: Color(0xFF38BDF8)),
+                                const SizedBox(width: 3),
+                                Text(
+                                  '${result!.nestedCount} Nested',
+                                  style: const TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF38BDF8),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                     if (deselected > 0)
                       Text(

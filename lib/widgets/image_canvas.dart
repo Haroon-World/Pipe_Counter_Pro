@@ -31,6 +31,10 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> with Tick
   late final AnimationController _progressAnimController;
   bool _showProgressCard = false;
 
+  // Normalized crop rectangle: 0.0 to 1.0 in image coordinates
+  Rect _cropBoxNorm = const Rect.fromLTWH(0.08, 0.08, 0.84, 0.84);
+  int? _activeCropHandle; // 0..3: corners, 4..7: edges, 8: center drag
+
   @override
   void initState() {
     super.initState();
@@ -55,11 +59,11 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> with Tick
 
   String _getDynamicStageText(int pct) {
     if (pct >= 100) return 'Detection Complete!';
-    if (pct >= 85) return 'Eliminating duplicates & finalizing counts ($pct%)...';
-    if (pct >= 60) return 'Fitting pipe diameters & verifying rims ($pct%)...';
-    if (pct >= 35) return 'Scanning pipe centers & inner hollows ($pct%)...';
-    if (pct >= 12) return 'Detecting pipe edges & gradient fields ($pct%)...';
-    return 'Enhancing contrast & color channels ($pct%)...';
+    if (pct >= 85) return 'Eliminating duplicates & nested classification ($pct%)...';
+    if (pct >= 60) return 'Fitting pipe rims & concentric hollows ($pct%)...';
+    if (pct >= 35) return 'Scanning pipe centers & Hough accumulator ($pct%)...';
+    if (pct >= 12) return 'Detecting pipe edges & gradient field ($pct%)...';
+    return 'Calibrating contrast & dynamic range ($pct%)...';
   }
 
   void _resetZoom() {
@@ -164,8 +168,8 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> with Tick
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
-                      'Pipe #${pipe.id} (${pipe.isManual ? "Manual" : "AI Detected"})',
-                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+                      'Pipe #${pipe.id} ${pipe.isNested ? "(Nested Inside #${pipe.nestedInId})" : (pipe.isManual ? "(Manual)" : "(AI Detected)")}',
+                      style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: Colors.white),
                     ),
                     IconButton(
                       icon: const Icon(Icons.close, color: Colors.white70),
@@ -319,7 +323,6 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> with Tick
         final canvasW = constraints.maxWidth;
         final canvasH = constraints.maxHeight;
 
-        // Calculate aspect-fit dimensions
         final scaleX = canvasW / widget.imageWidth;
         final scaleY = canvasH / widget.imageHeight;
         final scale = math.min(scaleX, scaleY);
@@ -328,12 +331,13 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> with Tick
         final renderedH = widget.imageHeight * scale;
 
         final isPanMode = state.selectedTool == CanvasTool.pan;
+        final isCropMode = state.selectedTool == CanvasTool.crop;
 
         return Stack(
           alignment: Alignment.center,
           children: [
             // Dark viewport background
-            Container(color: const Color(0xFF141416)),
+            Container(color: const Color(0xFF111318)),
 
             // Interactive viewer for pinch zoom and pan
             InteractiveViewer(
@@ -341,7 +345,7 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> with Tick
               minScale: 0.5,
               maxScale: 10.0,
               panEnabled: isPanMode,
-              scaleEnabled: true,
+              scaleEnabled: !isCropMode,
               boundaryMargin: const EdgeInsets.all(300),
               child: Center(
                 child: SizedBox(
@@ -358,7 +362,7 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> with Tick
                         filterQuality: FilterQuality.medium,
                       ),
 
-                      // Ellipse & dot overlay (shows numbers ONLY if state.showNumbers is true)
+                      // Ellipse & dot overlay
                       CustomPaint(
                         painter: PipeOverlayPainter(
                           imageWidth: widget.imageWidth,
@@ -369,24 +373,48 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> with Tick
                         ),
                       ),
 
-                      // Gesture overlay for manual pipe interaction
+                      // Crop Viewport Overlay when Crop Tool is active
+                      if (isCropMode)
+                        CustomPaint(
+                          painter: CropOverlayPainter(
+                            cropNorm: _cropBoxNorm,
+                            renderedSize: Size(renderedW, renderedH),
+                          ),
+                        ),
+
+                      // Gesture overlay for manual interactions
                       Positioned.fill(
                         child: GestureDetector(
                           behavior: HitTestBehavior.opaque,
+                          onPanStart: isCropMode
+                              ? (details) {
+                                  _onCropPanStart(details.localPosition, renderedW, renderedH);
+                                }
+                              : null,
+                          onPanUpdate: isCropMode
+                              ? (details) {
+                                  _onCropPanUpdate(details.localPosition, renderedW, renderedH);
+                                }
+                              : null,
+                          onPanEnd: isCropMode
+                              ? (_) {
+                                  _activeCropHandle = null;
+                                }
+                              : null,
                           onTapUp: (details) {
-                            if (!state.isProcessing) {
+                            if (!state.isProcessing && !isCropMode) {
                               _handleImageTap(details.localPosition, scale);
                             }
                           },
                           onLongPressStart: (details) {
-                            if (!state.isProcessing) {
+                            if (!state.isProcessing && !isCropMode) {
                               _handlePipeLongPress(details.localPosition, scale);
                             }
                           },
                         ),
                       ),
 
-                      // Real-time synchronized laser scanning beam
+                      // Real-time laser scanning line
                       if (_showProgressCard)
                         AnimatedBuilder(
                           animation: _progressAnimController,
@@ -423,7 +451,7 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> with Tick
               ),
             ),
 
-            // Real-time 0% to 100% scanning progress card in center
+            // Progress card in center
             if (_showProgressCard)
               AnimatedBuilder(
                 animation: _progressAnimController,
@@ -493,17 +521,17 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> with Tick
                 },
               ),
 
-            // Top Toolbar: Interactive Editing Mode Selector (matching desktop navbar pill)
+            // Top Toolbar: Modern Frosted Glass Pill
             Positioned(
               top: 12,
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
                 decoration: BoxDecoration(
-                  color: const Color(0xEE1E222A),
+                  color: const Color(0xEE1A1E26),
                   borderRadius: BorderRadius.circular(24),
-                  border: Border.all(color: Colors.white24),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
                   boxShadow: const [
-                    BoxShadow(color: Colors.black54, blurRadius: 10, offset: Offset(0, 3)),
+                    BoxShadow(color: Colors.black54, blurRadius: 12, offset: Offset(0, 4)),
                   ],
                 ),
                 child: Row(
@@ -515,6 +543,13 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> with Tick
                       icon: Icons.pan_tool_outlined,
                       label: 'Pan',
                       onPressed: () => notifier.setSelectedTool(CanvasTool.pan),
+                    ),
+                    _buildToolButton(
+                      tool: CanvasTool.crop,
+                      currentTool: state.selectedTool,
+                      icon: Icons.crop,
+                      label: 'Crop ROI',
+                      onPressed: () => notifier.setSelectedTool(CanvasTool.crop),
                     ),
                     _buildToolButton(
                       tool: CanvasTool.add,
@@ -540,7 +575,6 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> with Tick
                       label: 'Toggle',
                       onPressed: () => notifier.setSelectedTool(CanvasTool.select),
                     ),
-                    // Toggle Numbers Button (Default OFF so pipes are 100% visible)
                     Container(width: 1, height: 20, color: Colors.white24, margin: const EdgeInsets.symmetric(horizontal: 4)),
                     InkWell(
                       onTap: () => notifier.toggleShowNumbers(),
@@ -590,7 +624,7 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> with Tick
             // Secondary Floating Bar when in "Add Pipe" Mode: Color & Radius Adjuster
             if (state.selectedTool == CanvasTool.add)
               Positioned(
-                top: 60,
+                top: 64,
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
@@ -633,12 +667,70 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> with Tick
                 ),
               ),
 
-            // Mode hint indicator banner
-            if (state.selectedTool != CanvasTool.pan && !state.isProcessing)
+            // Crop Action Floating Bar when Crop Tool is active
+            if (isCropMode)
               Positioned(
-                bottom: 60,
+                bottom: 24,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFA1E222A),
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(color: const Color(0xFF38BDF8), width: 1.5),
+                    boxShadow: const [
+                      BoxShadow(color: Colors.black87, blurRadius: 18, offset: Offset(0, 6)),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      FilledButton.icon(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFF22C55E),
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                        ),
+                        onPressed: () {
+                          final imgRect = Rect.fromLTWH(
+                            _cropBoxNorm.left * widget.imageWidth,
+                            _cropBoxNorm.top * widget.imageHeight,
+                            _cropBoxNorm.width * widget.imageWidth,
+                            _cropBoxNorm.height * widget.imageHeight,
+                          );
+                          notifier.applyCrop(imgRect);
+                        },
+                        icon: const Icon(Icons.check, size: 18),
+                        label: const Text('Apply Crop', style: TextStyle(fontWeight: FontWeight.bold)),
+                      ),
+                      if (state.isCropped) ...[
+                        const SizedBox(width: 8),
+                        OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.white,
+                            side: const BorderSide(color: Colors.white38),
+                          ),
+                          onPressed: () => notifier.resetCrop(),
+                          icon: const Icon(Icons.restore, size: 16),
+                          label: const Text('Reset Full'),
+                        ),
+                      ],
+                      const SizedBox(width: 8),
+                      TextButton.icon(
+                        style: TextButton.styleFrom(foregroundColor: Colors.white70),
+                        onPressed: () => notifier.setSelectedTool(CanvasTool.pan),
+                        icon: const Icon(Icons.close, size: 16),
+                        label: const Text('Cancel'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+            // Mode hint indicator banner
+            if (!isCropMode && state.selectedTool != CanvasTool.pan && !state.isProcessing)
+              Positioned(
+                bottom: 20,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                   decoration: BoxDecoration(
                     color: Colors.black.withValues(alpha: 0.85),
                     borderRadius: BorderRadius.circular(16),
@@ -701,6 +793,72 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> with Tick
         );
       },
     );
+  }
+
+  void _onCropPanStart(Offset pos, double w, double h) {
+    final normX = (pos.dx / w).clamp(0.0, 1.0);
+    final normY = (pos.dy / h).clamp(0.0, 1.0);
+
+    const hitDist = 0.06;
+    final l = _cropBoxNorm.left;
+    final r = _cropBoxNorm.right;
+    final t = _cropBoxNorm.top;
+    final b = _cropBoxNorm.bottom;
+
+    if ((normX - l).abs() < hitDist && (normY - t).abs() < hitDist) {
+      _activeCropHandle = 0; // Top-left
+    } else if ((normX - r).abs() < hitDist && (normY - t).abs() < hitDist) {
+      _activeCropHandle = 1; // Top-right
+    } else if ((normX - r).abs() < hitDist && (normY - b).abs() < hitDist) {
+      _activeCropHandle = 2; // Bottom-right
+    } else if ((normX - l).abs() < hitDist && (normY - b).abs() < hitDist) {
+      _activeCropHandle = 3; // Bottom-left
+    } else if (_cropBoxNorm.contains(Offset(normX, normY))) {
+      _activeCropHandle = 8; // Center drag
+    } else {
+      _activeCropHandle = null;
+    }
+  }
+
+  void _onCropPanUpdate(Offset pos, double w, double h) {
+    if (_activeCropHandle == null) return;
+    final normX = (pos.dx / w).clamp(0.0, 1.0);
+    final normY = (pos.dy / h).clamp(0.0, 1.0);
+
+    setState(() {
+      double l = _cropBoxNorm.left;
+      double r = _cropBoxNorm.right;
+      double t = _cropBoxNorm.top;
+      double b = _cropBoxNorm.bottom;
+
+      switch (_activeCropHandle) {
+        case 0: // Top-left
+          l = math.min(normX, r - 0.05);
+          t = math.min(normY, b - 0.05);
+          break;
+        case 1: // Top-right
+          r = math.max(normX, l + 0.05);
+          t = math.min(normY, b - 0.05);
+          break;
+        case 2: // Bottom-right
+          r = math.max(normX, l + 0.05);
+          b = math.max(normY, t + 0.05);
+          break;
+        case 3: // Bottom-left
+          l = math.min(normX, r - 0.05);
+          b = math.max(normY, t + 0.05);
+          break;
+        case 8: // Center drag
+          final boxW = _cropBoxNorm.width;
+          final boxH = _cropBoxNorm.height;
+          l = (normX - boxW / 2).clamp(0.0, 1.0 - boxW);
+          t = (normY - boxH / 2).clamp(0.0, 1.0 - boxH);
+          r = l + boxW;
+          b = t + boxH;
+          break;
+      }
+      _cropBoxNorm = Rect.fromLTRB(l, t, r, b);
+    });
   }
 
   Widget _buildToolButton({
@@ -785,12 +943,67 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> with Tick
   }
 }
 
+class CropOverlayPainter extends CustomPainter {
+  final Rect cropNorm;
+  final Size renderedSize;
+
+  CropOverlayPainter({required this.cropNorm, required this.renderedSize});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Rect.fromLTRB(
+      cropNorm.left * renderedSize.width,
+      cropNorm.top * renderedSize.height,
+      cropNorm.right * renderedSize.width,
+      cropNorm.bottom * renderedSize.height,
+    );
+
+    // Dim area outside the crop rectangle
+    final darkPaint = Paint()..color = const Color(0xB3000000);
+    final path = Path()
+      ..addRect(Rect.fromLTWH(0, 0, renderedSize.width, renderedSize.height))
+      ..addRect(rect);
+    path.fillType = PathFillType.evenOdd;
+    canvas.drawPath(path, darkPaint);
+
+    // Bounding border
+    final borderPaint = Paint()
+      ..color = const Color(0xFF38BDF8)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0;
+    canvas.drawRect(rect, borderPaint);
+
+    // 4 Corner handles
+    final handlePaint = Paint()..color = const Color(0xFF38BDF8);
+    final handleRadius = 6.0;
+    canvas.drawCircle(rect.topLeft, handleRadius, handlePaint);
+    canvas.drawCircle(rect.topRight, handleRadius, handlePaint);
+    canvas.drawCircle(rect.bottomLeft, handleRadius, handlePaint);
+    canvas.drawCircle(rect.bottomRight, handleRadius, handlePaint);
+
+    // Handle borders
+    final handleBorder = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5;
+    canvas.drawCircle(rect.topLeft, handleRadius, handleBorder);
+    canvas.drawCircle(rect.topRight, handleRadius, handleBorder);
+    canvas.drawCircle(rect.bottomLeft, handleRadius, handleBorder);
+    canvas.drawCircle(rect.bottomRight, handleRadius, handleBorder);
+  }
+
+  @override
+  bool shouldRepaint(covariant CropOverlayPainter oldDelegate) {
+    return oldDelegate.cropNorm != cropNorm || oldDelegate.renderedSize != renderedSize;
+  }
+}
+
 class PipeOverlayPainter extends CustomPainter {
   final int imageWidth;
   final int imageHeight;
   final List<PipeDetection> detections;
   final double scale;
-  final bool showLabels; // When false: NO numbers are painted at all!
+  final bool showLabels;
 
   PipeOverlayPainter({
     required this.imageWidth,
@@ -835,19 +1048,35 @@ class PipeOverlayPainter extends CustomPainter {
       );
 
       if (pipe.isSelected) {
-        // Ultra-thin, crisp 1.2px outline so the real pipe rim and wall edges remain 100% visible
-        final outlinePaint = Paint()
-          ..color = baseColor
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = math.max(1.0, 1.2 * scale).clamp(1.0, 1.6)
-          ..isAntiAlias = true;
+        if (pipe.isNested) {
+          // Nested Pipe: Draw distinct double ring with glowing cyan accent to highlight inside status
+          final nestedOuterPaint = Paint()
+            ..color = baseColor
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = math.max(1.2, 1.4 * scale).clamp(1.2, 2.0)
+            ..isAntiAlias = true;
+          canvas.drawOval(ellipseRect, nestedOuterPaint);
 
-        canvas.drawOval(ellipseRect, outlinePaint);
+          final innerGlow = Paint()
+            ..color = const Color(0xFF38BDF8)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1.0;
+          canvas.drawOval(ellipseRect.deflate(2.0), innerGlow);
 
-        // Subtle center dot (1.8px) with no heavy tint
-        canvas.drawCircle(Offset.zero, 1.8, Paint()..color = baseColor);
+          canvas.drawCircle(Offset.zero, 2.2, Paint()..color = const Color(0xFF38BDF8));
+        } else {
+          // Standard pipe ring
+          final outlinePaint = Paint()
+            ..color = baseColor
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = math.max(1.0, 1.2 * scale).clamp(1.0, 1.6)
+            ..isAntiAlias = true;
+
+          canvas.drawOval(ellipseRect, outlinePaint);
+          canvas.drawCircle(Offset.zero, 1.8, Paint()..color = baseColor);
+        }
       } else {
-        // Excluded / Deselected pipe (Thin muted dashed outline with small red X)
+        // Excluded pipe
         final excludedPaint = Paint()
           ..color = Colors.grey.withValues(alpha: 0.4)
           ..style = PaintingStyle.stroke
@@ -856,7 +1085,6 @@ class PipeOverlayPainter extends CustomPainter {
 
         canvas.drawOval(ellipseRect, excludedPaint);
 
-        // Draw small red 'X' in center
         final xPaint = Paint()
           ..color = const Color(0xFFEF4444)
           ..style = PaintingStyle.stroke
@@ -871,12 +1099,13 @@ class PipeOverlayPainter extends CustomPainter {
 
       // Draw Pipe ID Badge (#1, #2...) ONLY if showLabels is explicitly enabled
       if (showLabels && scale >= 0.20 && pipe.isSelected) {
+        final labelText = pipe.isNested ? '#${pipe.id} (in #${pipe.nestedInId})' : '#${pipe.id}';
         final textPainter = TextPainter(
           text: TextSpan(
-            text: '#${pipe.id}',
+            text: labelText,
             style: TextStyle(
-              color: Colors.white,
-              fontSize: math.max(9.0, 11.0 * scale).clamp(9.0, 14.0),
+              color: pipe.isNested ? const Color(0xFF38BDF8) : Colors.white,
+              fontSize: math.max(9.0, 11.0 * scale).clamp(9.0, 13.0),
               fontWeight: FontWeight.bold,
               shadows: const [
                 Shadow(blurRadius: 2.0, color: Colors.black, offset: Offset(1, 1)),
@@ -903,7 +1132,7 @@ class PipeOverlayPainter extends CustomPainter {
 
         canvas.drawRRect(
           badgeRect,
-          Paint()..color = Colors.black.withValues(alpha: 0.75),
+          Paint()..color = Colors.black.withValues(alpha: 0.8),
         );
 
         textPainter.paint(canvas, labelOffset);

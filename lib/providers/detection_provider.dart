@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/material.dart' show Rect;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
@@ -14,6 +15,7 @@ import 'settings_provider.dart';
 
 enum CanvasTool {
   pan,
+  crop,
   add,
   delete,
   select;
@@ -22,6 +24,8 @@ enum CanvasTool {
     switch (this) {
       case CanvasTool.pan:
         return 'Pan & Zoom';
+      case CanvasTool.crop:
+        return 'Crop / ROI';
       case CanvasTool.add:
         return 'Add Pipe';
       case CanvasTool.delete:
@@ -55,6 +59,14 @@ class DetectionState {
   final double manualAddRadius;
   final List<List<PipeDetection>> undoStack;
 
+  // v2.0 Intelligent features
+  final Rect? activeCropRect;
+  final Uint8List? rawOriginalImageBytes;
+  final int rawOriginalWidth;
+  final int rawOriginalHeight;
+  final bool autoRadiusEnabled;
+  final bool autoSensitivityEnabled;
+
   const DetectionState({
     this.imageBytes,
     this.imageName,
@@ -66,18 +78,25 @@ class DetectionState {
     this.result,
     this.sizeThreshold = 500.0,
     this.showNumbers = false, // Default false: pipes visible without obstructing numbers
-    this.sizeTierMode = SizeTierMode.uniform, // Default uniform: all same size/green
+    this.sizeTierMode = SizeTierMode.autoDetect, // Default auto-detect: detects 1/2/3 sizes automatically
     this.detectionProgress = 0.0,
     this.detectionStage = '',
     this.selectedTool = CanvasTool.pan,
     this.activeAddCategory = PipeCategory.small,
     this.manualAddRadius = 25.0,
     this.undoStack = const [],
+    this.activeCropRect,
+    this.rawOriginalImageBytes,
+    this.rawOriginalWidth = 0,
+    this.rawOriginalHeight = 0,
+    this.autoRadiusEnabled = true,
+    this.autoSensitivityEnabled = true,
   });
 
   bool get hasImage => imageBytes != null && imageWidth > 0 && imageHeight > 0;
   bool get hasResults => result != null && result!.pipes.isNotEmpty;
   bool get canUndo => undoStack.isNotEmpty;
+  bool get isCropped => rawOriginalImageBytes != null && (imageWidth != rawOriginalWidth || imageHeight != rawOriginalHeight);
 
   DetectionState copyWith({
     Uint8List? imageBytes,
@@ -97,9 +116,16 @@ class DetectionState {
     PipeCategory? activeAddCategory,
     double? manualAddRadius,
     List<List<PipeDetection>>? undoStack,
+    Rect? activeCropRect,
+    Uint8List? rawOriginalImageBytes,
+    int? rawOriginalWidth,
+    int? rawOriginalHeight,
+    bool? autoRadiusEnabled,
+    bool? autoSensitivityEnabled,
     bool clearImage = false,
     bool clearResult = false,
     bool clearError = false,
+    bool clearCropRect = false,
   }) {
     return DetectionState(
       imageBytes: clearImage ? null : (imageBytes ?? this.imageBytes),
@@ -119,6 +145,12 @@ class DetectionState {
       activeAddCategory: activeAddCategory ?? this.activeAddCategory,
       manualAddRadius: manualAddRadius ?? this.manualAddRadius,
       undoStack: undoStack ?? this.undoStack,
+      activeCropRect: clearCropRect ? null : (activeCropRect ?? this.activeCropRect),
+      rawOriginalImageBytes: clearImage ? null : (rawOriginalImageBytes ?? this.rawOriginalImageBytes),
+      rawOriginalWidth: clearImage ? 0 : (rawOriginalWidth ?? this.rawOriginalWidth),
+      rawOriginalHeight: clearImage ? 0 : (rawOriginalHeight ?? this.rawOriginalHeight),
+      autoRadiusEnabled: autoRadiusEnabled ?? this.autoRadiusEnabled,
+      autoSensitivityEnabled: autoSensitivityEnabled ?? this.autoSensitivityEnabled,
     );
   }
 }
@@ -147,9 +179,24 @@ class DetectionNotifier extends StateNotifier<DetectionState> {
       state = state.copyWith(
         sizeTierMode: mode,
         result: updated,
+        sizeThreshold: updated.currentThreshold,
       );
     } else {
       state = state.copyWith(sizeTierMode: mode);
+    }
+  }
+
+  void setAutoRadiusEnabled(bool val) {
+    state = state.copyWith(autoRadiusEnabled: val);
+    if (val && state.hasImage) {
+      autoEstimateAdaptiveParameters();
+    }
+  }
+
+  void setAutoSensitivityEnabled(bool val) {
+    state = state.copyWith(autoSensitivityEnabled: val);
+    if (val && state.hasImage) {
+      autoEstimateAdaptiveParameters();
     }
   }
 
@@ -165,6 +212,75 @@ class DetectionNotifier extends StateNotifier<DetectionState> {
 
   void setManualAddRadius(double radius) {
     state = state.copyWith(manualAddRadius: radius.clamp(4.0, 300.0));
+  }
+
+  // --- Interactive Crop Controls ---
+
+  void setActiveCropRect(Rect? rect) {
+    state = state.copyWith(activeCropRect: rect, clearCropRect: rect == null);
+  }
+
+  Future<void> applyCrop(Rect cropRect) async {
+    if (state.imageBytes == null) return;
+    try {
+      state = state.copyWith(
+        isProcessing: true,
+        statusMessage: 'Cropping image to selection...',
+      );
+
+      final cropped = await Isolate.run(() {
+        final decoded = img.decodeImage(state.imageBytes!);
+        if (decoded == null) return null;
+
+        final x = cropRect.left.round().clamp(0, decoded.width - 1);
+        final y = cropRect.top.round().clamp(0, decoded.height - 1);
+        final w = cropRect.width.round().clamp(10, decoded.width - x);
+        final h = cropRect.height.round().clamp(10, decoded.height - y);
+
+        final croppedImg = img.copyCrop(decoded, x: x, y: y, width: w, height: h);
+        return img.encodeJpg(croppedImg, quality: 95);
+      });
+
+      if (cropped == null) {
+        state = state.copyWith(isProcessing: false, errorMessage: 'Failed to crop image format.');
+        return;
+      }
+
+      final dims = await Isolate.run(() => _decodeImageDimensions(cropped));
+      if (dims == null) {
+        state = state.copyWith(isProcessing: false, errorMessage: 'Unable to decode cropped image.');
+        return;
+      }
+
+      state = state.copyWith(
+        imageBytes: cropped,
+        imageWidth: dims.width,
+        imageHeight: dims.height,
+        clearCropRect: true,
+        selectedTool: CanvasTool.pan,
+        isProcessing: false,
+        clearResult: true,
+        undoStack: const [],
+      );
+
+      await autoEstimateAdaptiveParameters();
+    } catch (e) {
+      state = state.copyWith(isProcessing: false, errorMessage: 'Crop operation failed: $e');
+    }
+  }
+
+  Future<void> resetCrop() async {
+    if (state.rawOriginalImageBytes == null) return;
+    state = state.copyWith(
+      imageBytes: state.rawOriginalImageBytes,
+      imageWidth: state.rawOriginalWidth,
+      imageHeight: state.rawOriginalHeight,
+      clearCropRect: true,
+      selectedTool: CanvasTool.pan,
+      clearResult: true,
+      undoStack: const [],
+    );
+    await autoEstimateAdaptiveParameters();
   }
 
   void _pushUndo() {
@@ -268,7 +384,7 @@ class DetectionNotifier extends StateNotifier<DetectionState> {
     );
   }
 
-  // --- Image Loading & Camera (Background Offloaded) ---
+  // --- Image Loading & Camera ---
 
   Future<void> pickImageFromGallery() async {
     try {
@@ -342,7 +458,6 @@ class DetectionNotifier extends StateNotifier<DetectionState> {
         statusMessage: 'Reading image format...',
       );
 
-      // Offload heavy image decoding to background isolate so UI thread NEVER freezes
       _ImageDims? dims;
       if (kIsWeb) {
         dims = _decodeImageDimensions(bytes);
@@ -363,6 +478,10 @@ class DetectionNotifier extends StateNotifier<DetectionState> {
         imageName: name,
         imageWidth: dims.width,
         imageHeight: dims.height,
+        rawOriginalImageBytes: bytes,
+        rawOriginalWidth: dims.width,
+        rawOriginalHeight: dims.height,
+        clearCropRect: true,
         isProcessing: false,
         detectionProgress: 0.0,
         detectionStage: '',
@@ -371,8 +490,8 @@ class DetectionNotifier extends StateNotifier<DetectionState> {
         clearError: true,
       );
 
-      // Auto-estimate a sensible starting radius range from image dimensions
-      autoEstimateRadiusRange();
+      // Automatically calibrate optimal radius and edge sensitivity
+      await autoEstimateAdaptiveParameters();
     } catch (e) {
       state = state.copyWith(
         isProcessing: false,
@@ -381,24 +500,34 @@ class DetectionNotifier extends StateNotifier<DetectionState> {
     }
   }
 
-  void autoEstimateRadiusRange() {
-    if (state.imageWidth <= 0 || state.imageHeight <= 0) return;
+  /// Automatically calibrates radius range and edge sensitivity from the image
+  Future<void> autoEstimateAdaptiveParameters() async {
+    if (state.imageBytes == null) return;
+    try {
+      final params = await Isolate.run(() {
+        return ClassicalCVDetector.estimateAutoParameters(state.imageBytes!);
+      });
 
-    // If the user or app already has a calibrated pipe radius (e.g. 4 - 32 px), preserve it
-    final currentSettings = ref.read(settingsProvider);
-    if (currentSettings.minRadius >= 4.0 && currentSettings.maxRadius <= 45.0) {
-      final medianR = ((currentSettings.minRadius + currentSettings.maxRadius) / 2.0).roundToDouble();
-      state = state.copyWith(manualAddRadius: medianR);
-      return;
+      final estMin = params['minRadius'] ?? 8.0;
+      final estMax = params['maxRadius'] ?? 65.0;
+      final estSens = params['sensitivity'] ?? 0.50;
+
+      if (state.autoRadiusEnabled) {
+        ref.read(settingsProvider.notifier).setRadiusRange(estMin, estMax);
+        final medianR = ((estMin + estMax) / 2.0).roundToDouble();
+        state = state.copyWith(manualAddRadius: medianR);
+      }
+
+      if (state.autoSensitivityEnabled) {
+        ref.read(settingsProvider.notifier).setSensitivity(estSens);
+      }
+    } catch (e) {
+      // Graceful fallback
     }
+  }
 
-    final shortSide = math.min(state.imageWidth, state.imageHeight);
-    final minR = (shortSide * 0.005).roundToDouble().clamp(4.0, 10.0);
-    final maxR = (shortSide * 0.025).roundToDouble().clamp(minR + 8.0, 32.0);
-    final medianR = ((minR + maxR) / 2.0).roundToDouble();
-
-    ref.read(settingsProvider.notifier).setRadiusRange(minR, maxR);
-    state = state.copyWith(manualAddRadius: medianR);
+  void autoEstimateRadiusRange() {
+    autoEstimateAdaptiveParameters();
   }
 
   /// Runs pipe detection using background thread with real-time percentage animation
@@ -438,13 +567,11 @@ class DetectionNotifier extends StateNotifier<DetectionState> {
           outlierFraction: settings.outlierFraction,
         );
 
-        // Update progress indication
         state = state.copyWith(
           detectionProgress: 0.45,
           detectionStage: 'Scanning pipe rims & Hough circles (45%)...',
         );
 
-        // Run heavy CV detection in background isolate to keep 60/120 FPS UI fluid
         if (kIsWeb) {
           rawResult = await _runClassicalDetectionIsolate(params);
         } else {

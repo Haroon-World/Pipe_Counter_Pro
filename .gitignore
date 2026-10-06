@@ -32,6 +32,9 @@ env/
 *.log
 Output/
 *.iss
+.linkedin_chrome/
+.linkedin_session/
+.test_session/
 
 # IDEs and Editors
 .idea/

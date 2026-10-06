@@ -2,7 +2,7 @@ name: pipe_counter_pro
 description: "Cross-Platform Pipe Counter Application with Classical CV and TFLite ML engines."
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 2.0.0+2
 
 environment:
   sdk: '>=3.2.0 <4.0.0'

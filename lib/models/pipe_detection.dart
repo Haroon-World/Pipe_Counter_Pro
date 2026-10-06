@@ -85,6 +85,7 @@ class PipeDetection {
   final double solidity; // contourArea / convexHullArea (0.0 to 1.0)
   final bool isSelected; // True = active/counted, False = deselected/excluded
   final bool isManual; // True if manually added by user
+  final int? nestedInId; // ID of the outer pipe if this pipe is nested/inside another pipe
 
   const PipeDetection({
     required this.id,
@@ -99,6 +100,7 @@ class PipeDetection {
     this.solidity = 1.0,
     this.isSelected = true,
     this.isManual = false,
+    this.nestedInId,
   });
 
   /// Approximate diameter based on average of width and height
@@ -106,6 +108,9 @@ class PipeDetection {
 
   /// Approximate radius based on average of semi-axes
   double get averageRadius => diameter / 2.0;
+
+  /// Whether this pipe is nested inside an outer pipe
+  bool get isNested => nestedInId != null;
 
   /// Aspect ratio: minor axis / major axis (0.0 to 1.0)
   double get aspectRatio {
@@ -127,6 +132,7 @@ class PipeDetection {
     double? solidity,
     bool? isSelected,
     bool? isManual,
+    int? nestedInId,
   }) {
     return PipeDetection(
       id: id ?? this.id,
@@ -141,6 +147,7 @@ class PipeDetection {
       solidity: solidity ?? this.solidity,
       isSelected: isSelected ?? this.isSelected,
       isManual: isManual ?? this.isManual,
+      nestedInId: nestedInId ?? this.nestedInId,
     );
   }
 
@@ -163,6 +170,7 @@ class PipeDetection {
       solidity: solidity,
       isSelected: isSelected,
       isManual: isManual,
+      nestedInId: nestedInId,
     );
   }
 
@@ -180,6 +188,7 @@ class PipeDetection {
       'solidity': solidity,
       'isSelected': isSelected,
       'isManual': isManual,
+      'nestedInId': nestedInId,
     };
   }
 
@@ -207,6 +216,7 @@ class PipeDetection {
       solidity: (map['solidity'] as num?)?.toDouble() ?? 1.0,
       isSelected: (map['isSelected'] as bool?) ?? true,
       isManual: (map['isManual'] as bool?) ?? false,
+      nestedInId: map['nestedInId'] as int?,
     );
   }
 }
@@ -246,6 +256,10 @@ class DetectionResult {
   int get largeCount =>
       pipes.where((p) => p.isSelected && p.category == PipeCategory.large).length;
 
+  /// Count of pipes nested/sleeved inside larger pipes
+  int get nestedCount =>
+      pipes.where((p) => p.isSelected && p.isNested).length;
+
   double get minArea {
     if (pipes.isEmpty) return 0.0;
     return pipes.map((p) => p.area).reduce(math.min);
@@ -265,6 +279,41 @@ class DetectionResult {
     } else {
       return (sorted[mid - 1] + sorted[mid]) / 2.0;
     }
+  }
+
+  /// Computes the optimal threshold (in px^2 area) separating small from large pipes
+  /// using 1D Otsu / minimum between-class variance on active pipes.
+  double computeOptimalSplitThreshold() {
+    if (pipes.length < 2) return medianArea;
+    final activeAreas = pipes.where((p) => p.isSelected).map((p) => p.area).toList()..sort();
+    if (activeAreas.length < 2) return medianArea;
+
+    double bestThresh = medianArea;
+    double maxBetweenVariance = -1.0;
+    final total = activeAreas.length;
+    final totalSum = activeAreas.reduce((a, b) => a + b);
+
+    double sumB = 0.0;
+    int weightB = 0;
+
+    for (int i = 0; i < total - 1; i++) {
+      weightB++;
+      final weightF = total - weightB;
+      if (weightF == 0) break;
+
+      sumB += activeAreas[i];
+      final sumF = totalSum - sumB;
+
+      final meanB = sumB / weightB;
+      final meanF = sumF / weightF;
+
+      final betweenVariance = weightB * weightF * (meanB - meanF) * (meanB - meanF);
+      if (betweenVariance > maxBetweenVariance) {
+        maxBetweenVariance = betweenVariance;
+        bestThresh = (activeAreas[i] + activeAreas[i + 1]) / 2.0;
+      }
+    }
+    return bestThresh;
   }
 
   /// Instantly recalculate categories based on a size threshold
@@ -299,12 +348,16 @@ class DetectionResult {
     final cv = meanDiam > 0 ? (stdDiam / meanDiam) : 0.0;
 
     SizeTierMode effectiveMode = mode;
+    double updatedThreshold = currentThreshold;
+
     if (effectiveMode == SizeTierMode.autoDetect) {
       final diamRange = diams.last - diams.first;
+      // If coefficient of variation is high or clear spread exists, auto-detect 2 sizes
       if (cv < 0.12 || diamRange < 6.0) {
         effectiveMode = SizeTierMode.uniform;
       } else {
         effectiveMode = SizeTierMode.twoSizes;
+        updatedThreshold = computeOptimalSplitThreshold();
       }
     }
 
@@ -318,8 +371,12 @@ class DetectionResult {
           break;
 
         case SizeTierMode.twoSizes:
-          final medianDiam = diams[diams.length ~/ 2];
-          newCat = p.diameter <= medianDiam ? PipeCategory.small : PipeCategory.large;
+          if (updatedThreshold > 0) {
+            newCat = p.area <= updatedThreshold ? PipeCategory.small : PipeCategory.large;
+          } else {
+            final medianDiam = diams[diams.length ~/ 2];
+            newCat = p.diameter <= medianDiam ? PipeCategory.small : PipeCategory.large;
+          }
           break;
 
         case SizeTierMode.threeSizes:
@@ -341,7 +398,10 @@ class DetectionResult {
       return p.copyWith(category: newCat);
     }).toList();
 
-    return copyWith(pipes: updated);
+    return copyWith(
+      pipes: updated,
+      currentThreshold: updatedThreshold,
+    );
   }
 
   /// Toggle active/excluded state for a pipe

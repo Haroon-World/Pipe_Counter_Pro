@@ -13,42 +13,40 @@
 
 ---
 
-## 🌟 Key Capabilities
+## 🌟 Key Capabilities (v2.0.0 Intelligent Multi-Scale Vision Suite)
 
-### 🧠 1. Deep Learning Pipe Detection (YOLOv8)
-- Trained on industrial pipe bundle imagery to accurately detect hollow circular and oval pipe openings.
-- Handles challenging real-world warehouse and yard conditions: dense triangular stacking, severe shadows, perspective tilt, and varying surface reflectivity.
-- Eliminates false-positive interstitial gap counting through contour geometry verification.
+### 🎯 1. Concentric & Nested Pipe Resolution
+- Solves the core challenge of stacked pipes inserted inside larger outer pipes.
+- **Scale-Aware NMS**: Permits concentric inner circles when the radius ratio $R_{inner} / R_{outer} \le 0.70$ without duplicate suppression.
+- **Dual Accumulator Peaks & Hough Fallback**: Identifies inner pipe rims via localized gradient radial raycasting.
+- **Visual Nesting Indicators**: Nested pipes are rendered with distinct concentric double rings and labelled with parent ID references (e.g. `Pipe #4 in #2`).
 
-### 🎨 2. Color-Coded Size Differentiation
-- Automatically categorizes detected pipes into size tiers:
-  - 🟢 **Green**: Small / Standard Diameter
-  - 🟡 **Yellow**: Medium Diameter
-  - 🔴 **Red**: Large Diameter
-- Supports **1-Type (Uniform)**, **2-Type**, **3-Type**, or **Smart Auto-Clustering** modes with 0ms reclassification latency.
+### ⚡ 2. Automatic Radius & Sensitivity Calibration (Self-Tuning)
+- **Zero-Manual-Setup Detection**: Automatically estimates optimal minimum and maximum pipe radii using image gradient SNR and candidate peak distributions.
+- **Dynamic Sensitivity Noise Floor**: Automatically sets detection confidence based on Otsu thresholding of candidate scores.
+- **Full Manual Override**: Seamless manual sliders remain active; moving any slider smoothly switches to manual mode.
 
-### 📏 3. Smart Color-Matched Manual Annotations
-- **Click to Add with Auto-Sizing**: Selecting a color (e.g. 🟢 Green) and single-clicking on a missed pipe automatically derives the diameter from the median size of existing pipes of that exact color.
-- **Drag to Draw**: Drag to draw custom radius circles for irregular openings.
-- **Dynamic Recolor**: Right-click any circle on canvas to change its tier at any time.
+### 📏 3. Autonomous Multi-Size Detection & Live Size Split Ruler
+- **Automatic 1D Clustering**: Bimodal/trimodal Jenks natural-breaks partitioning analyzes diameters to detect single-size, 2-tier (Small/Large), or 3-tier (Small/Medium/Large) distributions automatically.
+- **Live Size Split Ruler Slider**: When 2 tiers are active, a dedicated split slider displays the threshold diameter in pixels with instant recoloring on drag and an **Auto-Snap** button.
 
-### 🗑️ 4. 1-Click Direct Delete
-- Remove false detections instantly: click directly over any circle to permanently delete it and update the live counts in real time.
-- Dedicated Delete Tool mode and hover + `Delete`/`Backspace` keyboard shortcuts.
+### ✂️ 4. Interactive Image Crop & ROI Cutout Tool
+- **8-Point Draggable Bounding Overlay**: Dimmed vignette mask with cyan dashed handles allows users to isolate pipe bundles and cut out unwanted background structures.
+- **Full Image Reset**: 1-click **Reset Full Image** button restores original uncropped framing anytime.
+- **Metadata Persistence**: Crop origin $(X, Y)$ and dimensions are preserved in Excel audit exports.
 
-### 🔒 5. 100% Offline & Secure
-- On-device CPU inference (~150–200 ms per image).
-- Zero cloud uploads, zero API costs, and full operational security for proprietary manufacturing facilities.
+### 🧠 5. Deep Learning & Classical CV Dual Engine
+- Python Desktop: YOLOv8 deep learning model (`best.pt`) with scale-aware dedupe and Hough inner fallback.
+- Flutter Mobile & Desktop: Hardware-accelerated Classical Computer Vision engine with Sobel gradient field and raycast boundary refinement.
 
-### 📊 6. Executive Excel (.xlsx) Reports
-- Automatically compiles:
-  - KPI Dashboard Summary (Total Count, Active Count, Color/Size Breakdown).
-  - Pipe-by-pipe inventory audit trail: Pipe ID, Center Coordinates $(X, Y)$, Diameter ($\text{px}$), Confidence, and Assigned Color Tier.
+### 📊 6. Executive Excel (.xlsx) & CSV Reports
+- Compiles KPI Dashboard Summary (Total Count, Active Count, Color/Size Breakdown, Nested Pipe Count, Crop Metadata).
+- Pipe-by-pipe inventory audit trail: Pipe ID, Coordinates $(X, Y)$, Diameter ($\text{px}$), Confidence, Assigned Color Tier, and Nested Parent ID.
 
-### 🧭 7. Modern Responsive Dark Mode GUI
-- Segmented glass-dark top navbar with auto-centering and zoom controls (`🔍−`, `🔍+`, `⛶ Fit`).
-- Native keyboard navigation: Arrow keys & `W/A/S/D` to pan, mouse wheel to scroll, `Ctrl + Wheel` to zoom.
-- Responsive layout adapting gracefully from 768p laptop displays up to 4K monitors.
+### 🧭 7. Modern Aesthetic Dark Mode GUI
+- Segmented glass-dark top navbar with live status chips, glowing selection rings, and quick tool pills.
+- Drag-and-drop image loading directly onto the application window.
+- Smooth canvas navigation with auto-centering and zoom controls (`🔍−`, `🔍+`, `⛶ Fit`).
 
 ---
 
@@ -119,11 +117,16 @@ The generated `.apk` will be located in:
 
 | Action | Shortcut |
 | :--- | :--- |
-| **Pan Canvas** | Arrow Keys (`Up` / `Down` / `Left` / `Right`) or `W / A / S / D` |
+| **Crop Tool** | `C` key (Drag box, `Enter` to apply, `Esc` to cancel) |
+| **Add Pipe Mode** | `A` key |
+| **Delete Mode** | `D` key |
+| **Pan Canvas** | `P` key / `Space` / Arrow Keys (`Up` / `Down` / `Left` / `Right`) |
 | **Fast Pan** | `Shift` + Arrow Keys |
 | **Zoom In / Out** | `+` / `-` keys or `Ctrl` + Mouse Wheel |
 | **Fit to Screen** | `F` key or `0` key |
-| **Delete Circle** | Left-click (in Delete Mode) or hover + `Delete` / `Backspace` |
+| **Open Image** | `Ctrl + O` |
+| **Export to Excel** | `Ctrl + E` |
+| **Delete Circle Directly** | Left-click (in Delete Mode) or hover + `Delete` / `Backspace` |
 | **Color Context Menu** | Right-click on any circle |
 
 ---

@@ -72,16 +72,18 @@ class ClassicalCVDetector {
       minRadius: scaledMinR,
       maxRadius: scaledMaxR,
       sensitivity: houghSensitivity,
+      detectConcentric: true,
     );
 
     // 5. Radial Ray-Casting: Inspect candidate centers and trace inner hollow boundary
     final validatedPipes = <_CandidateHollow>[];
 
     const numRays = 24;
-    final rSearchMin = math.max(3.0, scaledMinR * 0.65);
-    final rSearchMax = scaledMaxR * 1.30;
 
     for (final c in houghCircles) {
+      final rSearchMin = math.max(3.0, c.radius * 0.65);
+      final rSearchMax = math.min(math.min(procW, procH) / 2.0, c.radius * 1.35);
+
       if (c.cx < rSearchMin || c.cx >= procW - rSearchMin || c.cy < rSearchMin || c.cy >= procH - rSearchMin) {
         continue;
       }
@@ -139,7 +141,7 @@ class ClassicalCVDetector {
           }
         }
 
-        if (maxGrad >= 4.0 && bestR >= scaledMinR * 0.60 && bestR <= scaledMaxR * 1.35) {
+        if (maxGrad >= 4.0 && bestR >= rSearchMin * 0.90 && bestR <= rSearchMax * 1.10) {
           quadrantRays[quad]++;
           boundaryPoints.add(math.Point(c.cx + bestR * cosA, c.cy + bestR * sinA));
           rayAngles.add(angle);
@@ -239,38 +241,58 @@ class ClassicalCVDetector {
       }
     }
 
-    // 6. Physical Non-Maximum Suppression
+    // 6. Scale-Aware Physical Non-Maximum Suppression (Concentric & Nested Pipe Aware)
     validatedPipes.sort((a, b) => (b.contrast * b.pointsCount).compareTo(a.contrast * a.pointsCount));
     final deduplicated = <PipeDetection>[];
 
     for (final cand in validatedPipes) {
       final p = cand.pipe;
       bool isDuplicate = false;
+      int? foundOuterId;
 
-      for (final existing in deduplicated) {
+      for (int i = 0; i < deduplicated.length; i++) {
+        final existing = deduplicated[i];
         final dx = p.cx - existing.cx;
         final dy = p.cy - existing.cy;
         final dist = math.sqrt(dx * dx + dy * dy);
-        final avgR = (p.averageRadius + existing.averageRadius) / 2.0;
+        final minR = math.min(p.averageRadius, existing.averageRadius);
+        final maxR = math.max(p.averageRadius, existing.averageRadius);
+        final radiusRatio = minR / maxR;
 
-        if (dist < avgR * 1.05) {
+        // If circles are similarly sized and close together -> Duplicate
+        if (radiusRatio > 0.70 && dist < maxR * 0.85) {
           isDuplicate = true;
           break;
+        }
+
+        // If one circle is significantly smaller and concentric inside the other:
+        // This is a legitimate nested pipe, NOT a duplicate!
+        if (radiusRatio <= 0.70 && dist < maxR * 0.60) {
+          if (p.averageRadius < existing.averageRadius) {
+            // p is the inner pipe nested inside existing
+            foundOuterId = existing.id;
+          } else {
+            // existing is the inner pipe nested inside p
+            deduplicated[i] = existing.copyWith(nestedInId: p.id);
+          }
         }
       }
 
       if (!isDuplicate) {
-        deduplicated.add(p);
+        deduplicated.add(foundOuterId != null ? p.copyWith(nestedInId: foundOuterId) : p);
       }
     }
 
-    // 7. Median-based outlier rejection
+    // 7. Median-based outlier rejection (nested pipes are exempt because they are legitimately smaller)
     var finalSurviving = deduplicated;
     if (finalSurviving.length >= 4) {
-      final sortedAreas = finalSurviving.map((p) => p.area).toList()..sort();
-      final medianArea = sortedAreas[sortedAreas.length ~/ 2];
-      final minAllowedArea = medianArea * outlierFraction;
-      finalSurviving = finalSurviving.where((p) => p.area >= minAllowedArea).toList();
+      final nonNestedPipes = finalSurviving.where((p) => !p.isNested).toList();
+      if (nonNestedPipes.length >= 3) {
+        final sortedAreas = nonNestedPipes.map((p) => p.area).toList()..sort();
+        final medianArea = sortedAreas[sortedAreas.length ~/ 2];
+        final minAllowedArea = medianArea * outlierFraction;
+        finalSurviving = finalSurviving.where((p) => p.isNested || p.area >= minAllowedArea).toList();
+      }
     }
 
     // Sort pipes geometrically (top-to-bottom, left-to-right) for clean sequential IDs
@@ -339,6 +361,75 @@ class ClassicalCVDetector {
       engineName: 'Engine A (Classical CV: Adaptive Hough & Radial Profiler)',
       currentThreshold: effectiveThreshold,
     );
+  }
+
+  /// Analyzes an image to automatically calibrate optimal pipe radius bounds
+  /// [minRadius, maxRadius] and edge sensitivity [0.10..0.90] based on image
+  /// gradient statistics and scale-space candidate peaks.
+  static Map<String, double> estimateAutoParameters(Uint8List imageBytes) {
+    final decoded = img.decodeImage(imageBytes);
+    if (decoded == null) {
+      return {'minRadius': 8.0, 'maxRadius': 65.0, 'sensitivity': 0.50};
+    }
+
+    final origW = decoded.width;
+    final origH = decoded.height;
+    final maxDim = math.max(origW, origH);
+
+    img.Image thumb = decoded;
+    double scale = 1.0;
+    if (maxDim > 512) {
+      final newW = (origW * 512 / maxDim).round();
+      final newH = (origH * 512 / maxDim).round();
+      thumb = img.copyResize(decoded, width: newW, height: newH);
+      scale = maxDim / 512.0;
+    }
+
+    final thumbW = thumb.width;
+    final thumbH = thumb.height;
+    final gray = ImageFilters.toGrayscale(thumb);
+    final grad = GradientField.compute(gray, thumbW, thumbH);
+
+    // Dynamic edge sensitivity from 75th percentile of gradient
+    final p75 = grad.magnitudePercentile(0.75);
+    final autoSens = HoughCircleDetector.sensitivityForEdgeThreshold(p75.toDouble().clamp(20.0, 110.0));
+
+    // Fast scale-space candidate scan on thumbnail
+    final thumbMinR = 4.0;
+    final thumbMaxR = (math.min(thumbW, thumbH) * 0.25).clamp(8.0, 60.0);
+    final circles = HoughCircleDetector.detectCircles(
+      gray,
+      thumbW,
+      thumbH,
+      minRadius: thumbMinR,
+      maxRadius: thumbMaxR,
+      sensitivity: autoSens,
+      field: grad,
+      detectConcentric: true,
+      radiusStep: 3,
+    );
+
+    double estMinR = 8.0;
+    double estMaxR = 65.0;
+
+    if (circles.isNotEmpty) {
+      final radii = circles.map((c) => c.radius * scale).toList()..sort();
+      final p10 = radii[(radii.length * 0.10).floor()];
+      final p90 = radii[(radii.length * 0.90).floor()];
+
+      estMinR = (p10 * 0.70).clamp(4.0, 150.0);
+      estMaxR = (p90 * 1.35).clamp(estMinR + 8.0, 200.0);
+    } else {
+      final shortSide = math.min(origW, origH).toDouble();
+      estMinR = (shortSide * 0.008).clamp(4.0, 25.0);
+      estMaxR = (shortSide * 0.05).clamp(estMinR + 10.0, 120.0);
+    }
+
+    return {
+      'minRadius': estMinR.roundToDouble(),
+      'maxRadius': estMaxR.roundToDouble(),
+      'sensitivity': double.parse(autoSens.toStringAsFixed(2)),
+    };
   }
 
   static void _addHoughFallback(List<_CandidateHollow> list, HoughCircle c, double scaleFactor) {

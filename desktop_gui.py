@@ -22,7 +22,7 @@ Responsive Architecture & Navbar Features:
 import os
 import sys
 import math
-from typing import Optional, List
+from typing import Optional, List, Tuple
 
 import cv2
 import numpy as np
@@ -65,6 +65,7 @@ from PyQt6.QtWidgets import (
     QGraphicsItem,
     QGroupBox,
     QComboBox,
+    QCheckBox,
     QMenu,
     QButtonGroup,
     QRadioButton,
@@ -76,6 +77,7 @@ from pipe_counter_engine import (
     DetectionSummary,
     PipeDetection,
     SIZE_COLORS,
+    clamp_crop_rect,
 )
 
 
@@ -83,12 +85,22 @@ class DetectionWorker(QThread):
     finished = pyqtSignal(object)
     error = pyqtSignal(str)
 
-    def __init__(self, image: np.ndarray, confidence: float, iou: float, num_sizes: int):
+    def __init__(
+        self,
+        image: np.ndarray,
+        confidence: float,
+        iou: float,
+        num_sizes: int,
+        auto_confidence: bool = False,
+        detect_nested: bool = True,
+    ):
         super().__init__()
         self.image = image
         self.confidence = confidence
         self.iou = iou
         self.num_sizes = num_sizes
+        self.auto_confidence = auto_confidence
+        self.detect_nested = detect_nested
 
     def run(self):
         try:
@@ -97,6 +109,8 @@ class DetectionWorker(QThread):
                 confidence_threshold=self.confidence,
                 iou_threshold=self.iou,
                 num_sizes=self.num_sizes,
+                auto_confidence=self.auto_confidence,
+                detect_nested=self.detect_nested,
             )
             self.finished.emit(summary)
         except Exception as e:
@@ -127,8 +141,9 @@ class PipeGraphicsItem(QGraphicsItem):
         status_str = "Active (Counted)" if self.pipe.is_selected else "Deselected (Excluded)"
         src_str = "Manual" if self.pipe.is_manual else "AI"
         color_name = SIZE_COLORS.get(self.pipe.category, {}).get("name", self.pipe.category)
+        nest_str = f"\n🎯 Nested inside Pipe #{self.pipe.nested_in}" if self.pipe.nested_in is not None else ""
         self.setToolTip(
-            f"Pipe #{self.pipe.id} ({src_str})\n"
+            f"Pipe #{self.pipe.id} ({src_str}){nest_str}\n"
             f"Color/Size: {color_name}\n"
             f"Diameter: {self.pipe.diameter:.1f} px\n"
             f"Center: ({self.pipe.cx:.1f}, {self.pipe.cy:.1f})\n"
@@ -170,6 +185,13 @@ class PipeGraphicsItem(QGraphicsItem):
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawEllipse(QPointF(0, 0), w / 2.0, h / 2.0)
+
+            # If nested concentric pipe, draw a distinct inner dashed indicator ring
+            if self.pipe.nested_in is not None:
+                inner_pen = QPen(base_color if not self.is_hovered else QColor(56, 189, 248), 1.5, Qt.PenStyle.DashLine)
+                inner_pen.setCosmetic(True)
+                painter.setPen(inner_pen)
+                painter.drawEllipse(QPointF(0, 0), max(2.0, w / 2.0 - 3.5), max(2.0, h / 2.0 - 3.5))
 
             # Center dot
             painter.setPen(Qt.PenStyle.NoPen)
@@ -256,13 +278,92 @@ class PipeGraphicsItem(QGraphicsItem):
         self.update()
 
 
+class CropOverlayItem(QGraphicsItem):
+    """
+    Interactive ROI crop overlay displaying a darkened background mask with a clear
+    cutout, draggable corner handles, and live pixel dimensions badge.
+    """
+    def __init__(self, bounds: QRectF):
+        super().__init__()
+        self.bounds = bounds
+        self.crop_rect = QRectF()
+        self.setZValue(999)
+
+    def set_bounds(self, bounds: QRectF):
+        self.prepareGeometryChange()
+        self.bounds = bounds
+        self.update()
+
+    def set_crop_rect(self, rect: QRectF):
+        self.prepareGeometryChange()
+        self.crop_rect = rect.normalized()
+        self.update()
+
+    def boundingRect(self) -> QRectF:
+        return self.bounds
+
+    def paint(self, painter: QPainter, option, widget=None):
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        if not self.crop_rect.isValid() or self.crop_rect.width() < 4 or self.crop_rect.height() < 4:
+            painter.fillRect(self.bounds, QColor(15, 23, 42, 140))
+            return
+
+        full_path = QPainterPath()
+        full_path.addRect(self.bounds)
+        crop_path = QPainterPath()
+        crop_path.addRect(self.crop_rect)
+        dimmed_path = full_path.subtracted(crop_path)
+
+        painter.fillPath(dimmed_path, QBrush(QColor(15, 23, 42, 175)))
+
+        # Border
+        border_pen = QPen(QColor(56, 189, 248), 2.0, Qt.PenStyle.DashLine)
+        border_pen.setCosmetic(True)
+        painter.setPen(border_pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(self.crop_rect)
+
+        # Handle squares
+        handle_size = 7.0
+        painter.setPen(QPen(QColor(15, 23, 42), 1.0))
+        painter.setBrush(QBrush(QColor(56, 189, 248)))
+        corners = [
+            self.crop_rect.topLeft(),
+            self.crop_rect.topRight(),
+            self.crop_rect.bottomLeft(),
+            self.crop_rect.bottomRight(),
+        ]
+        for pt in corners:
+            painter.drawRect(QRectF(pt.x() - handle_size / 2, pt.y() - handle_size / 2, handle_size, handle_size))
+
+        # Size badge
+        w_px = int(round(self.crop_rect.width()))
+        h_px = int(round(self.crop_rect.height()))
+        badge_text = f"{w_px} × {h_px} px  •  Press Enter to Apply, Esc to Cancel"
+        font = painter.font()
+        font.setPointSize(9)
+        font.setBold(True)
+        painter.setFont(font)
+
+        badge_rect = QRectF(self.crop_rect.left(), max(self.bounds.top() + 4, self.crop_rect.top() - 24), 260, 20)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(QColor(15, 23, 42, 220)))
+        painter.drawRoundedRect(badge_rect, 4, 4)
+        painter.setPen(QPen(QColor(56, 189, 248)))
+        painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, badge_text)
+
+
 class InteractiveGraphicsView(QGraphicsView):
     """
     Responsive Graphics View with auto-centering on resize,
-    smooth scrolling, and interactive drawing.
+    smooth scrolling, interactive drawing, and interactive ROI cropping.
     """
     pipe_drawn = pyqtSignal(float, float, float)
     mode_changed = pyqtSignal(str)
+    crop_applied = pyqtSignal(QRectF)
+    crop_cancelled = pyqtSignal()
+    crop_active_changed = pyqtSignal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -286,6 +387,11 @@ class InteractiveGraphicsView(QGraphicsView):
         self._is_dragging_to_pan = False
         self._is_drawing_circle = False
 
+        # Cropping state
+        self._crop_overlay: Optional[CropOverlayItem] = None
+        self._is_cropping = False
+        self._crop_start_scene: Optional[QPointF] = None
+
     def resizeEvent(self, event: QResizeEvent):
         super().resizeEvent(event)
         # Keep image auto-fitted if user has not manually zoomed
@@ -301,16 +407,16 @@ class InteractiveGraphicsView(QGraphicsView):
     def keyPressEvent(self, event: QKeyEvent):
         step = 120 if (event.modifiers() & Qt.KeyboardModifier.ShiftModifier) else 50
 
-        if event.key() in (Qt.Key.Key_Up, Qt.Key.Key_W):
+        if event.key() in (Qt.Key.Key_Up,):
             self.pan_by(0, -step)
             event.accept()
-        elif event.key() in (Qt.Key.Key_Down, Qt.Key.Key_S):
+        elif event.key() in (Qt.Key.Key_Down,):
             self.pan_by(0, step)
             event.accept()
-        elif event.key() in (Qt.Key.Key_Left, Qt.Key.Key_A):
+        elif event.key() in (Qt.Key.Key_Left,):
             self.pan_by(-step, 0)
             event.accept()
-        elif event.key() in (Qt.Key.Key_Right, Qt.Key.Key_D):
+        elif event.key() in (Qt.Key.Key_Right,):
             self.pan_by(step, 0)
             event.accept()
         elif event.key() in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
@@ -322,6 +428,12 @@ class InteractiveGraphicsView(QGraphicsView):
         elif event.key() in (Qt.Key.Key_0, Qt.Key.Key_F):
             if self.scene() and self.scene().sceneRect().isValid():
                 self.reset_view(self.scene().sceneRect())
+            event.accept()
+        elif self._tool_mode == "crop" and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.apply_crop_now()
+            event.accept()
+        elif self._tool_mode == "crop" and event.key() == Qt.Key.Key_Escape:
+            self.cancel_crop()
             event.accept()
         else:
             super().keyPressEvent(event)
@@ -359,13 +471,49 @@ class InteractiveGraphicsView(QGraphicsView):
         if mode == "pan":
             self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
             self.viewport().setCursor(Qt.CursorShape.OpenHandCursor)
+            self._cleanup_crop_overlay()
+            self.crop_active_changed.emit(False)
         elif mode == "delete":
             self.setDragMode(QGraphicsView.DragMode.NoDrag)
             self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
+            self._cleanup_crop_overlay()
+            self.crop_active_changed.emit(False)
+        elif mode == "crop":
+            self.setDragMode(QGraphicsView.DragMode.NoDrag)
+            self.viewport().setCursor(Qt.CursorShape.CrossCursor)
+            if self._crop_overlay is None and self.scene() and self.scene().sceneRect().isValid():
+                self._crop_overlay = CropOverlayItem(self.scene().sceneRect())
+                self.scene().addItem(self._crop_overlay)
+            self.crop_active_changed.emit(True)
         else:
             self.setDragMode(QGraphicsView.DragMode.NoDrag)
             self.viewport().setCursor(Qt.CursorShape.CrossCursor)
+            self._cleanup_crop_overlay()
+            self.crop_active_changed.emit(False)
         self.mode_changed.emit(self._tool_mode)
+
+    def _cleanup_crop_overlay(self):
+        if self._crop_overlay is not None:
+            if self.scene() and self._crop_overlay.scene() == self.scene():
+                self.scene().removeItem(self._crop_overlay)
+            self._crop_overlay = None
+
+    def apply_crop_now(self):
+        if (
+            self._crop_overlay is not None
+            and self._crop_overlay.crop_rect.isValid()
+            and self._crop_overlay.crop_rect.width() >= 15
+            and self._crop_overlay.crop_rect.height() >= 15
+        ):
+            rect = self._crop_overlay.crop_rect
+            self._cleanup_crop_overlay()
+            self.set_tool_mode("draw")
+            self.crop_applied.emit(rect)
+
+    def cancel_crop(self):
+        self._cleanup_crop_overlay()
+        self.set_tool_mode("draw")
+        self.crop_cancelled.emit()
 
     def mousePressEvent(self, event: QMouseEvent):
         self.setFocus()
@@ -375,6 +523,17 @@ class InteractiveGraphicsView(QGraphicsView):
         if event.button() == Qt.MouseButton.LeftButton:
             self._press_pos_view = event.position()
             self._press_pos_scene = self.mapToScene(event.pos())
+
+            if self._tool_mode == "crop":
+                self._is_cropping = True
+                self._crop_start_scene = self._press_pos_scene
+                if self._crop_overlay is None and self.scene():
+                    self._crop_overlay = CropOverlayItem(self.scene().sceneRect())
+                    self.scene().addItem(self._crop_overlay)
+                if self._crop_overlay is not None:
+                    self._crop_overlay.set_crop_rect(QRectF(self._crop_start_scene, self._crop_start_scene))
+                event.accept()
+                return
 
             if is_pipe_item:
                 super().mousePressEvent(event)
@@ -401,6 +560,16 @@ class InteractiveGraphicsView(QGraphicsView):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent):
+        if self._is_cropping and self._crop_start_scene is not None:
+            curr_scene = self.mapToScene(event.pos())
+            rect = QRectF(self._crop_start_scene, curr_scene).normalized()
+            if self.scene():
+                rect = rect.intersected(self.scene().sceneRect())
+            if self._crop_overlay is not None:
+                self._crop_overlay.set_crop_rect(rect)
+            event.accept()
+            return
+
         if self._is_dragging_to_pan and self._press_pos_view is not None:
             delta = event.position() - self._press_pos_view
             self._press_pos_view = event.position()
@@ -430,6 +599,11 @@ class InteractiveGraphicsView(QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent):
+        if self._is_cropping:
+            self._is_cropping = False
+            event.accept()
+            return
+
         if self._is_dragging_to_pan:
             self._is_dragging_to_pan = False
             self.set_tool_mode(self._tool_mode)
@@ -492,9 +666,14 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(940, 620)
 
         self.cv_image: Optional[np.ndarray] = None
+        self.full_cv_image: Optional[np.ndarray] = None
+        self.crop_offset: Optional[Tuple[int, int, int, int]] = None
         self.source_image_name: str = "sample_pipes.jpg"
         self.summary: Optional[DetectionSummary] = None
         self.worker: Optional[DetectionWorker] = None
+
+        self._updating_conf_slider: bool = False
+        self._updating_split_slider: bool = False
 
         self.scene = QGraphicsScene(self)
         self.pixmap_item: Optional[QGraphicsPixmapItem] = None
@@ -503,6 +682,7 @@ class MainWindow(QMainWindow):
         self.current_draw_color = "Green"
         self.click_behavior = "delete"
 
+        self.setAcceptDrops(True)
         self.init_ui()
         self.apply_dark_theme()
 
@@ -515,23 +695,71 @@ class MainWindow(QMainWindow):
         if os.path.exists(default_path):
             self.load_image(default_path)
 
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            for url in event.mimeData().urls():
+                ext = os.path.splitext(url.toLocalFile())[1].lower()
+                if ext in [".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"]:
+                    event.acceptProposedAction()
+                    return
+        super().dragEnterEvent(event)
+
+    def dropEvent(self, event):
+        if event.mimeData().hasUrls():
+            for url in event.mimeData().urls():
+                file_path = url.toLocalFile()
+                ext = os.path.splitext(file_path)[1].lower()
+                if ext in [".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"]:
+                    self.load_image(file_path)
+                    event.acceptProposedAction()
+                    return
+        super().dropEvent(event)
+
     def eventFilter(self, obj, event):
         if event.type() == QEvent.Type.KeyPress:
-            if isinstance(obj, QComboBox):
+            if isinstance(obj, (QComboBox,)):
                 return super().eventFilter(obj, event)
 
             key = event.key()
-            step = 120 if (event.modifiers() & Qt.KeyboardModifier.ShiftModifier) else 50
-            if key in (Qt.Key.Key_Up, Qt.Key.Key_W):
+            mods = event.modifiers()
+
+            # Global Shortcuts
+            if mods & Qt.KeyboardModifier.ControlModifier:
+                if key == Qt.Key.Key_O:
+                    self.on_upload_clicked()
+                    return True
+                elif key == Qt.Key.Key_E:
+                    self.on_export_clicked()
+                    return True
+            else:
+                if key == Qt.Key.Key_C:
+                    if hasattr(self, "btn_tool_crop"):
+                        self.btn_tool_crop.click()
+                    return True
+                elif key == Qt.Key.Key_A:
+                    if hasattr(self, "btn_tool_add"):
+                        self.btn_tool_add.click()
+                    return True
+                elif key == Qt.Key.Key_D:
+                    if hasattr(self, "btn_tool_delete"):
+                        self.btn_tool_delete.click()
+                    return True
+                elif key in (Qt.Key.Key_P, Qt.Key.Key_Space):
+                    if hasattr(self, "btn_tool_pan"):
+                        self.btn_tool_pan.click()
+                    return True
+
+            step = 120 if (mods & Qt.KeyboardModifier.ShiftModifier) else 50
+            if key in (Qt.Key.Key_Up,):
                 self.view.pan_by(0, -step)
                 return True
-            elif key in (Qt.Key.Key_Down, Qt.Key.Key_S):
+            elif key in (Qt.Key.Key_Down,):
                 self.view.pan_by(0, step)
                 return True
-            elif key in (Qt.Key.Key_Left, Qt.Key.Key_A):
+            elif key in (Qt.Key.Key_Left,):
                 self.view.pan_by(-step, 0)
                 return True
-            elif key in (Qt.Key.Key_Right, Qt.Key.Key_D):
+            elif key in (Qt.Key.Key_Right,):
                 self.view.pan_by(step, 0)
                 return True
         return super().eventFilter(obj, event)
@@ -694,16 +922,51 @@ class MainWindow(QMainWindow):
         size_settings_layout.addWidget(lbl_size_mode)
 
         self.combo_size_tiers = QComboBox()
+        self.combo_size_tiers.addItem("⚡ Smart Auto-Detect Tiers", 0)
         self.combo_size_tiers.addItem("🟢 All Same Size (Green)", 1)
         self.combo_size_tiers.addItem("🟢🔴 2 Types (Green Small / Red Large)", 2)
         self.combo_size_tiers.addItem("🟢🟡🔴 3 Types (Green / Yellow / Red)", 3)
-        self.combo_size_tiers.addItem("⚡ Smart Auto-Detect Tiers", 0)
+        self.combo_size_tiers.setCurrentIndex(0)
         self.combo_size_tiers.setFixedHeight(32)
         self.combo_size_tiers.setStyleSheet(
             "background-color: #1e293b; color: #f8fafc; border: 1px solid #475569; padding: 3px 8px; border-radius: 4px;"
         )
         self.combo_size_tiers.currentIndexChanged.connect(self.on_size_tiers_changed)
         size_settings_layout.addWidget(self.combo_size_tiers)
+
+        # Size Split Slider (appears when 2 tiers are active)
+        self.split_group = QFrame()
+        self.split_group.setStyleSheet("background-color: #1e293b; border-radius: 6px; padding: 6px;")
+        split_layout = QVBoxLayout(self.split_group)
+        split_layout.setContentsMargins(6, 6, 6, 6)
+        split_layout.setSpacing(4)
+
+        split_header = QHBoxLayout()
+        lbl_split_title = QLabel("Size Split Ruler:")
+        lbl_split_title.setStyleSheet("font-size: 11px; font-weight: 700; color: #38bdf8;")
+        self.lbl_split_val = QLabel("24.0 px")
+        self.lbl_split_val.setStyleSheet("font-size: 11px; font-weight: 800; color: #38bdf8;")
+        split_header.addWidget(lbl_split_title)
+        split_header.addStretch()
+        split_header.addWidget(self.lbl_split_val)
+        split_layout.addLayout(split_header)
+
+        self.slider_split = QSlider(Qt.Orientation.Horizontal)
+        self.slider_split.setRange(10, 100)
+        self.slider_split.setValue(24)
+        self.slider_split.valueChanged.connect(self.on_split_slider_changed)
+        split_layout.addWidget(self.slider_split)
+
+        btn_snap_row = QHBoxLayout()
+        self.btn_snap_auto = QPushButton("⚡ Auto-Snap Threshold")
+        self.btn_snap_auto.setFixedHeight(24)
+        self.btn_snap_auto.setStyleSheet("font-size: 10px; background-color: #334155; color: #38bdf8; border-radius: 4px;")
+        self.btn_snap_auto.clicked.connect(self.on_auto_snap_clicked)
+        btn_snap_row.addWidget(self.btn_snap_auto)
+        split_layout.addLayout(btn_snap_row)
+
+        size_settings_layout.addWidget(self.split_group)
+        self.split_group.hide()
 
         control_layout.addWidget(size_settings_group)
 
@@ -713,9 +976,16 @@ class MainWindow(QMainWindow):
         ai_layout.setContentsMargins(10, 14, 10, 10)
         ai_layout.setSpacing(8)
 
+        # Auto Sensitivity Checkbox
+        self.chk_auto_conf = QCheckBox("⚡ Auto Sensitivity (Adaptive)")
+        self.chk_auto_conf.setChecked(True)
+        self.chk_auto_conf.setStyleSheet("font-size: 11px; font-weight: 700; color: #38bdf8;")
+        self.chk_auto_conf.toggled.connect(self.on_auto_conf_toggled)
+        ai_layout.addWidget(self.chk_auto_conf)
+
         conf_row = QHBoxLayout()
-        conf_row.addWidget(QLabel("Confidence:"))
-        self.lbl_conf_val = QLabel("35%")
+        conf_row.addWidget(QLabel("Confidence Floor:"))
+        self.lbl_conf_val = QLabel("Auto: 35%")
         self.lbl_conf_val.setStyleSheet("font-weight: 700; color: #38bdf8;")
         conf_row.addStretch()
         conf_row.addWidget(self.lbl_conf_val)
@@ -724,13 +994,20 @@ class MainWindow(QMainWindow):
         self.slider_conf = QSlider(Qt.Orientation.Horizontal)
         self.slider_conf.setRange(10, 85)
         self.slider_conf.setValue(35)
-        self.slider_conf.valueChanged.connect(lambda v: self.lbl_conf_val.setText(f"{v}%"))
+        self.slider_conf.valueChanged.connect(self.on_conf_slider_changed)
         ai_layout.addWidget(self.slider_conf)
+
+        # Nested pipes checkbox
+        self.chk_nested = QCheckBox("🎯 Detect Nested / Inner Pipes")
+        self.chk_nested.setChecked(True)
+        self.chk_nested.setStyleSheet("font-size: 11px; font-weight: 700; color: #a78bfa;")
+        self.chk_nested.setToolTip("Detects smaller pipes inside larger ones without suppression.")
+        ai_layout.addWidget(self.chk_nested)
 
         self.btn_run = QPushButton("⚡ Detect & Count (AI)")
         self.btn_run.setFixedHeight(40)
         self.btn_run.setStyleSheet(
-            "background-color: #0284c7; color: #ffffff; font-size: 12px; font-weight: 700; border-radius: 6px;"
+            "background-color: #0284c7; color: #ffffff; font-size: 13px; font-weight: 700; border-radius: 6px;"
         )
         self.btn_run.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_run.clicked.connect(self.on_run_clicked)
@@ -776,6 +1053,9 @@ class MainWindow(QMainWindow):
         self.view = InteractiveGraphicsView(self.scene)
         self.view.pipe_drawn.connect(self.on_manual_pipe_drawn)
         self.view.mode_changed.connect(self.on_view_mode_changed)
+        self.view.crop_applied.connect(self.on_crop_applied)
+        self.view.crop_cancelled.connect(self.on_crop_cancelled)
+        self.view.crop_active_changed.connect(self.on_crop_active_changed)
 
         # ----------------- MODERN RESPONSIVE NAVBAR -----------------
         navbar = QFrame()
@@ -799,6 +1079,15 @@ class MainWindow(QMainWindow):
             "padding: 4px 10px; font-size: 11px; font-weight: 600; color: #cbd5e1;"
         )
         nav_layout.addWidget(self.lbl_img_info)
+
+        # Reset crop button (shown when crop is active)
+        self.btn_reset_crop = QPushButton("↺ Full Image")
+        self.btn_reset_crop.setFixedHeight(28)
+        self.btn_reset_crop.setStyleSheet("background-color: #334155; color: #a78bfa; font-size: 11px; padding: 0 8px; border-radius: 4px;")
+        self.btn_reset_crop.clicked.connect(self.on_reset_crop_clicked)
+        self.btn_reset_crop.hide()
+        nav_layout.addWidget(self.btn_reset_crop)
+
         nav_layout.addStretch()
 
         # Center: Tool Mode Segmented Pill
@@ -815,6 +1104,7 @@ class MainWindow(QMainWindow):
         pill_layout.setSpacing(4)
 
         self.btn_tool_add = QPushButton("✏️ Add")
+        self.btn_tool_add.setToolTip("Add pipe manually (Shortcut: A)")
         self.btn_tool_add.setCheckable(True)
         self.btn_tool_add.setChecked(True)
         self.btn_tool_add.setFixedHeight(28)
@@ -860,6 +1150,7 @@ class MainWindow(QMainWindow):
         pill_layout.addWidget(div1)
 
         self.btn_tool_delete = QPushButton("🗑️ Delete")
+        self.btn_tool_delete.setToolTip("Delete pipe (Shortcut: D)")
         self.btn_tool_delete.setCheckable(True)
         self.btn_tool_delete.setFixedHeight(28)
         self.btn_tool_delete.setStyleSheet("padding: 0 10px; font-size: 11px; color: #f87171; border: none;")
@@ -872,18 +1163,49 @@ class MainWindow(QMainWindow):
         pill_layout.addWidget(div2)
 
         self.btn_tool_pan = QPushButton("✋ Pan")
+        self.btn_tool_pan.setToolTip("Pan canvas (Shortcut: P or Space)")
         self.btn_tool_pan.setCheckable(True)
         self.btn_tool_pan.setFixedHeight(28)
         self.btn_tool_pan.setStyleSheet("padding: 0 10px; font-size: 11px; border: none;")
         self.btn_tool_pan.clicked.connect(lambda: self.view.set_tool_mode("pan"))
         pill_layout.addWidget(self.btn_tool_pan)
 
+        div3 = QFrame()
+        div3.setFrameShape(QFrame.Shape.VLine)
+        div3.setStyleSheet("color: #334155; margin: 4px 2px;")
+        pill_layout.addWidget(div3)
+
+        self.btn_tool_crop = QPushButton("✂️ Crop")
+        self.btn_tool_crop.setToolTip("Crop image ROI (Shortcut: C)")
+        self.btn_tool_crop.setCheckable(True)
+        self.btn_tool_crop.setFixedHeight(28)
+        self.btn_tool_crop.setStyleSheet("padding: 0 10px; font-size: 11px; color: #38bdf8; border: none;")
+        self.btn_tool_crop.clicked.connect(lambda: self.view.set_tool_mode("crop"))
+        pill_layout.addWidget(self.btn_tool_crop)
+
         self.canvas_tool_group = QButtonGroup(self)
         self.canvas_tool_group.addButton(self.btn_tool_add)
         self.canvas_tool_group.addButton(self.btn_tool_delete)
         self.canvas_tool_group.addButton(self.btn_tool_pan)
+        self.canvas_tool_group.addButton(self.btn_tool_crop)
 
         nav_layout.addWidget(tools_pill)
+
+        # Crop action buttons (shown only during crop mode)
+        self.btn_apply_crop = QPushButton("✂️ Apply Crop")
+        self.btn_apply_crop.setFixedHeight(28)
+        self.btn_apply_crop.setStyleSheet("background-color: #0284c7; color: #ffffff; font-weight: 700; font-size: 11px; padding: 0 10px; border-radius: 4px;")
+        self.btn_apply_crop.clicked.connect(self.view.apply_crop_now)
+        self.btn_apply_crop.hide()
+        nav_layout.addWidget(self.btn_apply_crop)
+
+        self.btn_cancel_crop = QPushButton("✕ Cancel")
+        self.btn_cancel_crop.setFixedHeight(28)
+        self.btn_cancel_crop.setStyleSheet("background-color: #334155; color: #f87171; font-size: 11px; padding: 0 8px; border-radius: 4px;")
+        self.btn_cancel_crop.clicked.connect(self.view.cancel_crop)
+        self.btn_cancel_crop.hide()
+        nav_layout.addWidget(self.btn_cancel_crop)
+
         nav_layout.addStretch()
 
         # Right: Zoom & Fit Pill
@@ -1085,14 +1407,82 @@ class MainWindow(QMainWindow):
             self.btn_tool_pan.setChecked(True)
             self.btn_tool_add.setChecked(False)
             self.btn_tool_delete.setChecked(False)
+            self.btn_tool_crop.setChecked(False)
+            self.btn_apply_crop.hide()
+            self.btn_cancel_crop.hide()
         elif mode == "delete":
             self.btn_tool_delete.setChecked(True)
             self.btn_tool_add.setChecked(False)
             self.btn_tool_pan.setChecked(False)
+            self.btn_tool_crop.setChecked(False)
+            self.btn_apply_crop.hide()
+            self.btn_cancel_crop.hide()
+        elif mode == "crop":
+            self.btn_tool_crop.setChecked(True)
+            self.btn_tool_add.setChecked(False)
+            self.btn_tool_delete.setChecked(False)
+            self.btn_tool_pan.setChecked(False)
+            self.btn_apply_crop.show()
+            self.btn_cancel_crop.show()
         else:
             self.btn_tool_add.setChecked(True)
             self.btn_tool_delete.setChecked(False)
             self.btn_tool_pan.setChecked(False)
+            self.btn_tool_crop.setChecked(False)
+            self.btn_apply_crop.hide()
+            self.btn_cancel_crop.hide()
+
+    def on_crop_applied(self, rect: QRectF):
+        if self.cv_image is None or self.full_cv_image is None:
+            return
+
+        x0 = int(round(rect.x()))
+        y0 = int(round(rect.y()))
+        w = int(round(rect.width()))
+        h = int(round(rect.height()))
+
+        img_h, img_w = self.cv_image.shape[:2]
+        clamped = clamp_crop_rect(img_w, img_h, (x0, y0, w, h), min_size=20)
+        if clamped is None:
+            QMessageBox.warning(self, "Invalid Crop", "Selected crop area is too small (minimum 20x20 px).")
+            return
+
+        cx, cy, cw, ch = clamped
+        if self.crop_offset is not None:
+            ox, oy, _, _ = self.crop_offset
+            self.crop_offset = (ox + cx, oy + cy, cw, ch)
+        else:
+            self.crop_offset = (cx, cy, cw, ch)
+
+        self.cv_image = self.cv_image[cy:cy + ch, cx:cx + cw].copy()
+        self.btn_reset_crop.show()
+        self.lbl_img_info.setText(f"✂️ {self.source_image_name} (Cropped) • {cw} × {ch} px")
+        self.display_base_image()
+        self.on_run_clicked()
+
+    def on_crop_cancelled(self):
+        self.btn_apply_crop.hide()
+        self.btn_cancel_crop.hide()
+        self.view.set_tool_mode("draw")
+
+    def on_crop_active_changed(self, active: bool):
+        if active:
+            self.btn_apply_crop.show()
+            self.btn_cancel_crop.show()
+        else:
+            self.btn_apply_crop.hide()
+            self.btn_cancel_crop.hide()
+
+    def on_reset_crop_clicked(self):
+        if self.full_cv_image is None:
+            return
+        self.cv_image = self.full_cv_image.copy()
+        self.crop_offset = None
+        self.btn_reset_crop.hide()
+        h, w = self.cv_image.shape[:2]
+        self.lbl_img_info.setText(f"🖼️ {self.source_image_name} • {w} × {h} px")
+        self.display_base_image()
+        self.on_run_clicked()
 
     def on_upload_clicked(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -1110,7 +1500,10 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Load Error", f"Failed to read image at:\n{path}")
             return
 
-        self.cv_image = img
+        self.full_cv_image = img.copy()
+        self.cv_image = img.copy()
+        self.crop_offset = None
+        self.btn_reset_crop.hide()
         self.source_image_name = os.path.basename(path)
         h, w = img.shape[:2]
         self.lbl_img_info.setText(f"🖼️ {self.source_image_name}  •  {w} × {h} px")
@@ -1134,11 +1527,80 @@ class MainWindow(QMainWindow):
         self.scene.setSceneRect(0, 0, w, h)
         self.view.reset_view(QRectF(0, 0, w, h))
 
+    def on_auto_conf_toggled(self, checked: bool):
+        if checked:
+            if self.summary and self.summary.confidence_used:
+                self.lbl_conf_val.setText(f"Auto: {int(round(self.summary.confidence_used * 100))}%")
+            else:
+                self.lbl_conf_val.setText("Auto")
+        else:
+            self.lbl_conf_val.setText(f"{self.slider_conf.value()}%")
+
+    def on_conf_slider_changed(self, v: int):
+        if self._updating_conf_slider:
+            return
+        if self.chk_auto_conf.isChecked():
+            self.chk_auto_conf.setChecked(False)
+        self.lbl_conf_val.setText(f"{v}%")
+
+    def update_split_slider_ui(self):
+        if self.summary is None or len(self.summary.pipes) < 2:
+            self.split_group.hide()
+            return
+
+        active_k = self.summary.active_k
+        if active_k == 2 and self.summary.split_thresholds:
+            diams = [p.diameter for p in self.summary.pipes if p.is_selected]
+            if not diams:
+                self.split_group.hide()
+                return
+            min_d = max(1.0, math.floor(min(diams)))
+            max_d = max(min_d + 1.0, math.ceil(max(diams)))
+            thresh = self.summary.split_thresholds[0]
+
+            self._updating_split_slider = True
+            self.slider_split.setRange(int(min_d), int(max_d))
+            self.slider_split.setValue(int(round(thresh)))
+            self.lbl_split_val.setText(f"{thresh:.1f} px")
+            self._updating_split_slider = False
+            self.split_group.show()
+        else:
+            self.split_group.hide()
+
+    def on_split_slider_changed(self, val: int):
+        if self._updating_split_slider:
+            return
+        if self.summary is None or len(self.summary.pipes) < 2:
+            return
+        thresh = float(val)
+        self.lbl_split_val.setText(f"{thresh:.1f} px")
+        self.summary = PipeCounterEngine.reclassify(self.summary, num_sizes=2, thresholds=[thresh])
+        for it in self.pipe_items:
+            it.update_tooltip()
+            it.update()
+        self.update_kpi_dashboard()
+
+    def on_auto_snap_clicked(self):
+        if self.summary is None or not self.summary.split_thresholds:
+            return
+        snap_val = self.summary.split_thresholds[0]
+        self._updating_split_slider = True
+        self.slider_split.setValue(int(round(snap_val)))
+        self.lbl_split_val.setText(f"{snap_val:.1f} px")
+        self._updating_split_slider = False
+        self.summary = PipeCounterEngine.reclassify(self.summary, num_sizes=2, thresholds=[snap_val])
+        for it in self.pipe_items:
+            it.update_tooltip()
+            it.update()
+        self.update_kpi_dashboard()
+
     def on_run_clicked(self):
         if self.cv_image is None:
             QMessageBox.information(self, "No Image", "Please upload a pipe bundle image first.")
             return
 
+        auto_conf = self.chk_auto_conf.isChecked()
+        detect_nested = self.chk_nested.isChecked()
         confidence = self.slider_conf.value() / 100.0
         num_sizes = self.combo_size_tiers.currentData()
 
@@ -1146,7 +1608,14 @@ class MainWindow(QMainWindow):
         self.progress_bar.show()
         self.lbl_perf.setText("Running AI Pipe Detection...")
 
-        self.worker = DetectionWorker(self.cv_image, confidence, iou=0.45, num_sizes=num_sizes)
+        self.worker = DetectionWorker(
+            self.cv_image,
+            confidence=confidence,
+            iou=0.45,
+            num_sizes=num_sizes,
+            auto_confidence=auto_conf,
+            detect_nested=detect_nested,
+        )
         self.worker.finished.connect(self.on_detection_finished)
         self.worker.error.connect(self.on_detection_error)
         self.worker.start()
@@ -1156,7 +1625,20 @@ class MainWindow(QMainWindow):
         self.progress_bar.hide()
         self.summary = summary
 
+        if self.crop_offset is not None and self.full_cv_image is not None:
+            self.summary.crop_rect = self.crop_offset
+            self.summary.original_width = self.full_cv_image.shape[1]
+            self.summary.original_height = self.full_cv_image.shape[0]
+
+        if summary.auto_confidence and summary.confidence_used:
+            self._updating_conf_slider = True
+            c_val = int(round(summary.confidence_used * 100))
+            self.slider_conf.setValue(c_val)
+            self.lbl_conf_val.setText(f"Auto: {c_val}%")
+            self._updating_conf_slider = False
+
         self.build_pipe_overlays()
+        self.update_split_slider_ui()
         self.update_kpi_dashboard()
 
     def on_detection_error(self, err_msg: str):
@@ -1173,6 +1655,7 @@ class MainWindow(QMainWindow):
         for item in self.pipe_items:
             item.update_tooltip()
             item.update()
+        self.update_split_slider_ui()
         self.update_kpi_dashboard()
 
     def build_pipe_overlays(self):
@@ -1358,6 +1841,11 @@ class MainWindow(QMainWindow):
 
         total_container_height = max(50, card_count * 56)
         self.size_cards_container.setFixedHeight(total_container_height)
+
+        if getattr(self.summary, "nested_count", 0) > 0:
+            lbl_nested = QLabel(f"🎯 Nested Pipes: {self.summary.nested_count} (inner rings)")
+            lbl_nested.setStyleSheet("font-size: 11px; color: #a78bfa; font-weight: 700; padding-top: 4px;")
+            self.size_cards_layout.addWidget(lbl_nested)
 
         if deselected_count > 0:
             lbl_desel = QLabel(f"Excluded: {deselected_count} pipes")

@@ -313,13 +313,51 @@ class HomeScreen extends ConsumerWidget {
           ),
         ],
 
+        if (detectionState.isCropped) ...[
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: const Color(0xFF38BDF8).withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFF38BDF8).withValues(alpha: 0.3)),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Row(
+                  children: [
+                    Icon(Icons.crop, size: 14, color: Color(0xFF38BDF8)),
+                    SizedBox(width: 6),
+                    Text(
+                      'Cropped Image Active',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF38BDF8)),
+                    ),
+                  ],
+                ),
+                InkWell(
+                  onTap: () => detectionNotifier.resetCrop(),
+                  child: const Text(
+                    'Reset Full',
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white70),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+
         const SizedBox(height: 14),
 
-        // Hough Pipe Radius Range Slider with Auto-Estimate
+        // Hough Pipe Radius Range Slider with Auto-Calibration
         RadiusRangeSlider(
           minRadius: settings.minRadius,
           maxRadius: settings.maxRadius,
+          isAutoEnabled: detectionState.autoRadiusEnabled,
           hasImage: detectionState.hasImage,
+          onToggleAuto: (val) {
+            detectionNotifier.setAutoRadiusEnabled(val);
+          },
           onChanged: (range) {
             settingsNotifier.setRadiusRange(range.start, range.end);
           },
@@ -327,7 +365,7 @@ class HomeScreen extends ConsumerWidget {
             detectionNotifier.autoEstimateRadiusRange();
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
-                content: Text('Auto-estimated radius range based on photo resolution. Verify before detecting.'),
+                content: Text('Auto-calibrated radius bounds from image frequency spectrum.'),
                 duration: Duration(seconds: 2),
                 behavior: SnackBarBehavior.floating,
               ),
@@ -337,10 +375,14 @@ class HomeScreen extends ConsumerWidget {
 
         const SizedBox(height: 12),
 
-        // Sensitivity / Confidence Slider
+        // Sensitivity / Confidence Slider with Dynamic SNR Auto-Tuning
         ConfidenceSlider(
           value: settings.sensitivity,
           isEngineA: settings.engine == DetectionEngine.classicalCV,
+          isAutoEnabled: detectionState.autoSensitivityEnabled,
+          onToggleAuto: (val) {
+            detectionNotifier.setAutoSensitivityEnabled(val);
+          },
           onChanged: (val) {
             settingsNotifier.setSensitivity(val);
           },
@@ -412,6 +454,17 @@ class HomeScreen extends ConsumerWidget {
             currentThreshold: detectionState.sizeThreshold,
             onChanged: (newThreshold) {
               detectionNotifier.updateThreshold(newThreshold);
+            },
+            onAutoSnap: () {
+              final autoThresh = detectionState.result!.computeOptimalSplitThreshold();
+              detectionNotifier.updateThreshold(autoThresh);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Re-snapped ruler to optimal bimodal distribution valley.'),
+                  duration: Duration(seconds: 1),
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
             },
           ),
 
