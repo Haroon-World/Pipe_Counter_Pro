@@ -1,0 +1,82 @@
+name: Build & Release Windows Desktop Installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Publish to GitHub Release'
+        required: false
+        type: boolean
+        default: true
+      release_tag:
+        description: 'Release Tag (e.g. v2.0.0)'
+        required: false
+        type: string
+        default: 'v2.0.0'
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows Desktop Installer (.exe)
+    runs-on: windows-latest
+
+    steps:
+      - name: "Step 1 - Checkout repository"
+        uses: actions/checkout@v4
+
+      - name: "Step 2 - Set up Python 3.12"
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: "Step 3 - Install Inno Setup compiler"
+        run: |
+          choco install innosetup --no-progress
+          echo "C:\Program Files (x86)\Inno Setup 6" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: "Step 4 - Install Python dependencies"
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt pyinstaller
+
+      - name: "Step 5 - Run engine tests"
+        run: |
+          python -m unittest test_engine_v2.py
+
+      - name: "Step 6 - Compile standalone binaries with PyInstaller"
+        run: |
+          pyinstaller --noconfirm PipeCounterPro.spec
+
+      - name: "Step 7 - Compile Windows Installer with Inno Setup"
+        run: |
+          iscc installer_setup.iss
+
+      - name: "Step 8 - Verify compiled installer"
+        run: |
+          Get-ChildItem -Path dist_installer
+          $installer = Get-Item -Path "dist_installer\PipeCounterPro_v2.0.0_Setup.exe"
+          Write-Host "Installer created successfully: $($installer.FullName) ($([math]::Round($installer.Length / 1MB, 2)) MB)"
+
+      - name: "Step 9 - Upload Installer as downloadable artifact"
+        uses: actions/upload-artifact@v4
+        with:
+          name: PipeCounterPro_Windows_Setup_v2.0.0
+          path: dist_installer/PipeCounterPro_v2.0.0_Setup.exe
+          retention-days: 30
+
+      - name: "Step 10 - Attach Installer to GitHub Release"
+        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.create_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name || github.event.inputs.release_tag || 'v2.0.0' }}
+          name: Release ${{ github.ref_name || github.event.inputs.release_tag || 'v2.0.0' }}
+          files: dist_installer/PipeCounterPro_v2.0.0_Setup.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -6,8 +6,7 @@ block_cipher = None
 
 added_files = [
     ('pipe_counting_repo/best.pt', 'pipe_counting_repo'),
-    ('assets/real_pipes_test.jpg', 'assets'),
-    ('assets/sample_pipes.png', 'assets'),
+    ('assets', 'assets'),
 ]
 
 hidden_imports = [
@@ -56,6 +55,7 @@ exe = EXE(
     strip=False,
     upx=True,
     console=False,
+    icon='assets/app_icon.ico',
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

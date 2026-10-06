@@ -31,10 +31,13 @@ env/
 *.csv
 *.log
 Output/
-*.iss
+dist_installer/
 .linkedin_chrome/
 .linkedin_session/
 .test_session/
+linkedin_bridge.py
+Link_LinkedIn.bat
+post_content.txt
 
 # IDEs and Editors
 .idea/

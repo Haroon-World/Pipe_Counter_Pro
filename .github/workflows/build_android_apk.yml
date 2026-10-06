@@ -2,9 +2,18 @@ name: Build & Release Android APK
 
 on:
   workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Publish to GitHub Release'
+        required: false
+        type: boolean
+        default: true
+      release_tag:
+        description: 'Release Tag (e.g. v2.0.0)'
+        required: false
+        type: string
+        default: 'v2.0.0'
   push:
-    branches:
-      - main
     tags:
       - 'v*'
 
@@ -59,20 +68,22 @@ jobs:
 
       - name: "Step 8 - Rename and prepare APK"
         run: |
-          cp build/app/outputs/flutter-apk/app-release.apk PipeCounterPro_Android_v1.0.apk
-          echo "APK ready: $(ls -lh PipeCounterPro_Android_v1.0.apk)"
+          cp build/app/outputs/flutter-apk/app-release.apk PipeCounterPro_Android_v2.0.0.apk
+          echo "APK ready: $(ls -lh PipeCounterPro_Android_v2.0.0.apk)"
 
       - name: "Step 9 - Upload APK as downloadable artifact"
         uses: actions/upload-artifact@v4
         with:
-          name: PipeCounterPro_Android_v1.0
-          path: PipeCounterPro_Android_v1.0.apk
+          name: PipeCounterPro_Android_v2.0.0
+          path: PipeCounterPro_Android_v2.0.0.apk
           retention-days: 30
 
-      - name: "Step 10 - Attach APK to GitHub Release v1.0"
+      - name: "Step 10 - Attach APK to GitHub Release"
+        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.create_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0
-          files: PipeCounterPro_Android_v1.0.apk
+          tag_name: ${{ github.ref_name || github.event.inputs.release_tag || 'v2.0.0' }}
+          name: Release ${{ github.ref_name || github.event.inputs.release_tag || 'v2.0.0' }}
+          files: PipeCounterPro_Android_v2.0.0.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
