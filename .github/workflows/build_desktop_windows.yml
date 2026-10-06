@@ -72,11 +72,12 @@ jobs:
           retention-days: 30
 
       - name: "Step 10 - Attach Installer to GitHub Release"
-        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.create_release == 'true'
+        if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || github.event.inputs.create_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name || github.event.inputs.release_tag || 'v2.0.0' }}
-          name: Release ${{ github.ref_name || github.event.inputs.release_tag || 'v2.0.0' }}
+          tag_name: ${{ (startsWith(github.ref, 'refs/tags/v') && github.ref_name) || github.event.inputs.release_tag || 'v2.0.0' }}
+          name: Release ${{ (startsWith(github.ref, 'refs/tags/v') && github.ref_name) || github.event.inputs.release_tag || 'v2.0.0' }}
           files: dist_installer/PipeCounterPro_v2.0.0_Setup.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
