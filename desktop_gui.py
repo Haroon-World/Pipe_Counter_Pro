@@ -93,6 +93,7 @@ class DetectionWorker(QThread):
         num_sizes: int,
         auto_confidence: bool = False,
         detect_nested: bool = True,
+        detect_occluded: bool = True,
     ):
         super().__init__()
         self.image = image
@@ -101,6 +102,7 @@ class DetectionWorker(QThread):
         self.num_sizes = num_sizes
         self.auto_confidence = auto_confidence
         self.detect_nested = detect_nested
+        self.detect_occluded = detect_occluded
 
     def run(self):
         try:
@@ -111,6 +113,7 @@ class DetectionWorker(QThread):
                 num_sizes=self.num_sizes,
                 auto_confidence=self.auto_confidence,
                 detect_nested=self.detect_nested,
+                detect_occluded=self.detect_occluded,
             )
             self.finished.emit(summary)
         except Exception as e:
@@ -142,8 +145,14 @@ class PipeGraphicsItem(QGraphicsItem):
         src_str = "Manual" if self.pipe.is_manual else "AI"
         color_name = SIZE_COLORS.get(self.pipe.category, {}).get("name", self.pipe.category)
         nest_str = f"\n🎯 Nested inside Pipe #{self.pipe.nested_in}" if self.pipe.nested_in is not None else ""
+        occ_str = ""
+        if self.pipe.is_occluded:
+            occ_str = f"\n🌓 Partially Occluded: ~{int(round(self.pipe.visibility_ratio * 100))}% visible (reconstructed Ø)"
+            if self.pipe.occluded_by is not None:
+                occ_str += f"\n   Behind Pipe #{self.pipe.occluded_by}"
+
         self.setToolTip(
-            f"Pipe #{self.pipe.id} ({src_str}){nest_str}\n"
+            f"Pipe #{self.pipe.id} ({src_str}){nest_str}{occ_str}\n"
             f"Color/Size: {color_name}\n"
             f"Diameter: {self.pipe.diameter:.1f} px\n"
             f"Center: ({self.pipe.cx:.1f}, {self.pipe.cy:.1f})\n"
@@ -192,6 +201,13 @@ class PipeGraphicsItem(QGraphicsItem):
                 inner_pen.setCosmetic(True)
                 painter.setPen(inner_pen)
                 painter.drawEllipse(QPointF(0, 0), max(2.0, w / 2.0 - 3.5), max(2.0, h / 2.0 - 3.5))
+
+            # If partially occluded / stacked, draw a dashed outer lavender halo indicating reconstructed circular rim
+            if self.pipe.is_occluded:
+                occ_pen = QPen(QColor(192, 132, 252, 215), 1.8, Qt.PenStyle.DashDotLine)
+                occ_pen.setCosmetic(True)
+                painter.setPen(occ_pen)
+                painter.drawEllipse(QPointF(0, 0), w / 2.0 + 2.0, h / 2.0 + 2.0)
 
             # Center dot
             painter.setPen(Qt.PenStyle.NoPen)
@@ -373,7 +389,7 @@ class InteractiveGraphicsView(QGraphicsView):
 
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.setBackgroundBrush(QBrush(QColor(15, 23, 42)))
+        self.setBackgroundBrush(QBrush(QColor(9, 13, 22)))
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
@@ -784,7 +800,7 @@ class MainWindow(QMainWindow):
         header_box = QVBoxLayout()
         header_box.setSpacing(2)
         title_lbl = QLabel("PIPE COUNTER PRO")
-        title_lbl.setStyleSheet("font-size: 19px; font-weight: 800; color: #38bdf8; letter-spacing: 1.5px;")
+        title_lbl.setStyleSheet("font-size: 20px; font-weight: 900; color: #38bdf8; letter-spacing: 1.5px;")
         subtitle_lbl = QLabel("AI Pipe Counter with Intelligent Size Differentiation")
         subtitle_lbl.setStyleSheet("font-size: 11px; color: #94a3b8;")
         header_box.addWidget(title_lbl)
@@ -793,6 +809,10 @@ class MainWindow(QMainWindow):
 
         self.btn_upload = QPushButton("📁 Upload Pipe Image")
         self.btn_upload.setFixedHeight(40)
+        self.btn_upload.setStyleSheet(
+            "background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #334155, stop:1 #1e293b); "
+            "color: #f8fafc; font-weight: 700; border: 1px solid #475569; border-radius: 6px;"
+        )
         self.btn_upload.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_upload.clicked.connect(self.on_upload_clicked)
         control_layout.addWidget(self.btn_upload)
@@ -804,16 +824,19 @@ class MainWindow(QMainWindow):
         kpi_layout.setSpacing(8)
 
         total_hero_box = QFrame()
-        total_hero_box.setFixedHeight(82)
-        total_hero_box.setStyleSheet("background-color: #1e293b; border-radius: 8px; padding: 8px;")
+        total_hero_box.setFixedHeight(84)
+        total_hero_box.setStyleSheet(
+            "background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0f172a, stop:1 #1e293b); "
+            "border: 1px solid #0284c7; border-radius: 8px; padding: 6px;"
+        )
         total_hero_layout = QVBoxLayout(total_hero_box)
         total_hero_layout.setContentsMargins(0, 0, 0, 0)
         total_hero_layout.setSpacing(2)
 
         self.lbl_total_val = QLabel("0")
         self.lbl_total_val.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_total_val.setFixedHeight(42)
-        self.lbl_total_val.setStyleSheet("font-size: 40px; font-weight: 900; color: #38bdf8;")
+        self.lbl_total_val.setFixedHeight(44)
+        self.lbl_total_val.setStyleSheet("font-size: 42px; font-weight: 900; color: #38bdf8; letter-spacing: -1px;")
         self.lbl_total_title = QLabel("TOTAL PIPES (COUNTED)")
         self.lbl_total_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_total_title.setStyleSheet("font-size: 11px; font-weight: 700; color: #94a3b8; letter-spacing: 1px;")
@@ -1003,6 +1026,13 @@ class MainWindow(QMainWindow):
         self.chk_nested.setStyleSheet("font-size: 11px; font-weight: 700; color: #a78bfa;")
         self.chk_nested.setToolTip("Detects smaller pipes inside larger ones without suppression.")
         ai_layout.addWidget(self.chk_nested)
+
+        # Occluded / Stacked pipes checkbox
+        self.chk_occluded = QCheckBox("🌓 Detect Occluded / Stacked Pipes")
+        self.chk_occluded.setChecked(True)
+        self.chk_occluded.setStyleSheet("font-size: 11px; font-weight: 700; color: #c084fc;")
+        self.chk_occluded.setToolTip("Uses sub-pixel RANSAC arc curvature to reconstruct occluded pipes and recover background pipes.")
+        ai_layout.addWidget(self.chk_occluded)
 
         self.btn_run = QPushButton("⚡ Detect & Count (AI)")
         self.btn_run.setFixedHeight(40)
@@ -1261,12 +1291,13 @@ class MainWindow(QMainWindow):
     def apply_dark_theme(self):
         qss = """
         QMainWindow, QWidget {
-            background-color: #0f172a;
+            background-color: #0b0f19;
             color: #f8fafc;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
         }
         QGroupBox {
-            border: 1px solid #334155;
+            background-color: #111827;
+            border: 1px solid #1f293d;
             border-radius: 8px;
             margin-top: 14px;
             font-weight: 700;
@@ -1279,6 +1310,33 @@ class MainWindow(QMainWindow):
             subcontrol-position: top left;
             left: 10px;
             padding: 0 4px;
+        }
+        QToolTip {
+            background-color: #0f172a;
+            color: #f8fafc;
+            border: 1px solid #0284c7;
+            border-radius: 4px;
+            padding: 6px;
+            font-size: 11px;
+        }
+        QComboBox {
+            background-color: #1e293b;
+            color: #f8fafc;
+            border: 1px solid #475569;
+            border-radius: 6px;
+            padding: 4px 8px;
+        }
+        QComboBox::drop-down {
+            border: none;
+            width: 20px;
+        }
+        QComboBox QAbstractItemView {
+            background-color: #1e293b;
+            color: #f8fafc;
+            selection-background-color: #0284c7;
+            selection-color: #ffffff;
+            border: 1px solid #334155;
+            padding: 4px;
         }
         QPushButton {
             background-color: #334155;
@@ -1341,7 +1399,7 @@ class MainWindow(QMainWindow):
         }
         QScrollBar:vertical {
             border: none;
-            background: #0f172a;
+            background: #0b0f19;
             width: 8px;
             margin: 0px;
             border-radius: 4px;
@@ -1359,7 +1417,7 @@ class MainWindow(QMainWindow):
         }
         QScrollBar:horizontal {
             border: none;
-            background: #0f172a;
+            background: #0b0f19;
             height: 8px;
             margin: 0px;
             border-radius: 4px;
@@ -1601,6 +1659,7 @@ class MainWindow(QMainWindow):
 
         auto_conf = self.chk_auto_conf.isChecked()
         detect_nested = self.chk_nested.isChecked()
+        detect_occluded = self.chk_occluded.isChecked()
         confidence = self.slider_conf.value() / 100.0
         num_sizes = self.combo_size_tiers.currentData()
 
@@ -1615,6 +1674,7 @@ class MainWindow(QMainWindow):
             num_sizes=num_sizes,
             auto_confidence=auto_conf,
             detect_nested=detect_nested,
+            detect_occluded=detect_occluded,
         )
         self.worker.finished.connect(self.on_detection_finished)
         self.worker.error.connect(self.on_detection_error)
@@ -1846,6 +1906,11 @@ class MainWindow(QMainWindow):
             lbl_nested = QLabel(f"🎯 Nested Pipes: {self.summary.nested_count} (inner rings)")
             lbl_nested.setStyleSheet("font-size: 11px; color: #a78bfa; font-weight: 700; padding-top: 4px;")
             self.size_cards_layout.addWidget(lbl_nested)
+
+        if getattr(self.summary, "occluded_count", 0) > 0:
+            lbl_occluded = QLabel(f"🌓 Stacked / Partial: {self.summary.occluded_count} (reconstructed Ø)")
+            lbl_occluded.setStyleSheet("font-size: 11px; color: #c084fc; font-weight: 700; padding-top: 2px;")
+            self.size_cards_layout.addWidget(lbl_occluded)
 
         if deselected_count > 0:
             lbl_desel = QLabel(f"Excluded: {deselected_count} pipes")

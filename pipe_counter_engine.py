@@ -83,6 +83,10 @@ class PipeDetection:
         default_factory=lambda: ((0.0, 0.0), (0.0, 0.0), 0.0)
     )
     nested_in: Optional[int] = None  # id of the outer pipe if this pipe sits inside another
+    is_occluded: bool = False        # True if partially hidden by a foreground pipe (front/back stack)
+    visibility_ratio: float = 1.0    # Estimated visible fraction of circular rim (0.20..1.0)
+    occluded_by: Optional[int] = None # ID of the foreground pipe that occludes this one
+    visible_arc_span: Optional[Tuple[float, float]] = None # (start_deg, end_deg) of visible crescent
 
     @property
     def diameter(self) -> float:
@@ -127,6 +131,7 @@ class DetectionSummary:
     confidence_used: float = 0.35          # final confidence threshold applied
     auto_confidence: bool = False          # True when confidence_used was picked automatically
     nested_detection: bool = False         # True when nested-aware detection was enabled
+    detect_occluded: bool = False          # True when partial arc / occlusion reconstruction was enabled
     crop_rect: Optional[Tuple[int, int, int, int]] = None  # (x, y, w, h) in original image px
     original_width: Optional[int] = None
     original_height: Optional[int] = None
@@ -134,6 +139,10 @@ class DetectionSummary:
     @property
     def nested_count(self) -> int:
         return sum(1 for p in self.pipes if p.nested_in is not None)
+
+    @property
+    def occluded_count(self) -> int:
+        return sum(1 for p in self.pipes if p.is_occluded)
 
 
 @dataclass
@@ -547,6 +556,291 @@ def find_nested_inner_circles(
     return found
 
 
+def fit_circle_taubin(points: np.ndarray) -> Optional[Tuple[float, float, float]]:
+    """
+    Algebraic circle fitting using Taubin / Kåsa method on 2D points.
+    points: (N, 2) array of (x, y) coordinates.
+    Returns (xc, yc, r) or None if degenerate.
+    """
+    if points is None or len(points) < 3:
+        return None
+    x = points[:, 0].astype(np.float64)
+    y = points[:, 1].astype(np.float64)
+    n = len(x)
+
+    mx = float(np.mean(x))
+    my = float(np.mean(y))
+    u = x - mx
+    v = y - my
+    z = u * u + v * v
+
+    try:
+        A = np.column_stack([u, v, np.ones(n)])
+        p, residuals, rank, s = np.linalg.lstsq(A, z, rcond=None)
+        uc = p[0] / 2.0
+        vc = p[1] / 2.0
+        r_sq = p[2] + uc * uc + vc * vc
+        if r_sq <= 0:
+            return None
+        r = math.sqrt(r_sq)
+        xc = uc + mx
+        yc = vc + my
+        return float(xc), float(yc), float(r)
+    except Exception:
+        return None
+
+
+def ransac_circle_fit(
+    points: np.ndarray,
+    max_iterations: int = 40,
+    dist_threshold: float = 1.5,
+    min_inliers_fraction: float = 0.50,
+) -> Optional[Tuple[float, float, float, np.ndarray, float, float]]:
+    """
+    Robust RANSAC circle fitting for noisy edge / partial arc points.
+    Returns (xc, yc, r, inliers_mask, inlier_ratio, angular_coverage) or None.
+    angular_coverage is fraction in [0..1] of the 360-degree perimeter spanned by inliers.
+    """
+    if points is None or len(points) < 6:
+        return None
+
+    best_inliers = None
+    best_circle = None
+    best_score = 0
+    n = len(points)
+
+    for _ in range(max_iterations):
+        sample_idx = np.random.choice(n, 3, replace=False)
+        pts_sample = points[sample_idx]
+        res = fit_circle_taubin(pts_sample)
+        if res is None:
+            continue
+        xc, yc, r = res
+        if r <= 2.0 or r > 300.0:
+            continue
+
+        dists = np.abs(np.hypot(points[:, 0] - xc, points[:, 1] - yc) - r)
+        inliers = dists <= dist_threshold
+        inlier_count = int(np.sum(inliers))
+
+        if inlier_count > best_score:
+            best_score = inlier_count
+            best_inliers = inliers
+            best_circle = (xc, yc, r)
+
+    if best_circle is None or best_score < 6:
+        return None
+
+    # Refit using all inliers
+    inlier_pts = points[best_inliers]
+    refit = fit_circle_taubin(inlier_pts)
+    if refit is not None:
+        xc, yc, r = refit
+        dists = np.abs(np.hypot(points[:, 0] - xc, points[:, 1] - yc) - r)
+        best_inliers = dists <= dist_threshold
+        inlier_pts = points[best_inliers]
+
+    if len(inlier_pts) < 6:
+        return None
+
+    # Compute angular coverage across 36 angular bins (10 deg each)
+    angles = np.arctan2(inlier_pts[:, 1] - yc, inlier_pts[:, 0] - xc)
+    bins = np.zeros(36, dtype=bool)
+    deg_idx = np.floor((np.degrees(angles) % 360) / 10.0).astype(int)
+    bins[np.clip(deg_idx, 0, 35)] = True
+    angular_coverage = float(np.sum(bins)) / 36.0
+
+    inlier_ratio = float(len(inlier_pts)) / float(n)
+    return (float(xc), float(yc), float(r), best_inliers, inlier_ratio, angular_coverage)
+
+
+def refine_pipe_rims(
+    image: np.ndarray,
+    pipes: List[PipeDetection],
+    max_refine_dist: float = 4.5,
+) -> Tuple[List[PipeDetection], int, int]:
+    """
+    Refines detected pipe positions and radii by fitting circular arcs to sub-pixel edges.
+    Restores true circular diameter for pipes whose YOLO bounding box was squished due
+    to partial occlusion (front/back stacking).
+    Returns (refined_pipes, refined_count, occluded_count).
+    """
+    if image is None or not pipes:
+        return pipes, 0, 0
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+    h_img, w_img = gray.shape[:2]
+
+    # Contrast enhancement for shadow-penetrating edge detection
+    clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+    enhanced = clahe.apply(gray)
+    blurred = cv2.bilateralFilter(enhanced, d=7, sigmaColor=35, sigmaSpace=7)
+    med = float(np.median(blurred))
+    lo_t = int(max(10, 0.66 * med))
+    hi_t = int(max(lo_t + 20, min(255, 1.33 * med)))
+    edges = cv2.Canny(blurred, lo_t, hi_t)
+
+    refined_pipes: List[PipeDetection] = []
+    refined_count = 0
+    occluded_count = 0
+
+    for p in pipes:
+        if p.is_manual:
+            refined_pipes.append(p)
+            continue
+
+        r_box = p.avg_radius
+        pad = int(math.ceil(r_box * 0.40))
+        x0 = max(0, int(math.floor(p.cx - r_box - pad)))
+        y0 = max(0, int(math.floor(p.cy - r_box - pad)))
+        x1 = min(w_img, int(math.ceil(p.cx + r_box + pad)))
+        y1 = min(h_img, int(math.ceil(p.cy + r_box + pad)))
+
+        if x1 - x0 < 8 or y1 - y0 < 8:
+            refined_pipes.append(p)
+            continue
+
+        roi_edges = edges[y0:y1, x0:x1]
+        local_cx = p.cx - x0
+        local_cy = p.cy - y0
+
+        y_pts, x_pts = np.where(roi_edges > 0)
+        if len(x_pts) < 12:
+            refined_pipes.append(p)
+            continue
+
+        dists = np.hypot(x_pts - local_cx, y_pts - local_cy)
+        ring_mask = (dists >= r_box * 0.70) & (dists <= r_box * 1.30)
+        candidate_pts = np.column_stack([x_pts[ring_mask], y_pts[ring_mask]])
+
+        if len(candidate_pts) >= 12:
+            fit = ransac_circle_fit(candidate_pts, max_iterations=40, dist_threshold=1.5)
+            if fit is not None:
+                fcx, fcy, fr, inliers, inlier_ratio, coverage = fit
+                dist_shift = math.hypot(fcx - local_cx, fcy - local_cy)
+                rad_change = abs(fr - r_box) / max(r_box, 1.0)
+
+                if dist_shift <= max_refine_dist and rad_change <= 0.35 and fr >= 4.0:
+                    global_cx = fcx + x0
+                    global_cy = fcy + y0
+                    p.cx = global_cx
+                    p.cy = global_cy
+                    p.width = fr * 2.0
+                    p.height = fr * 2.0
+                    p.area = float(math.pi * fr * fr)
+                    p.ellipse = ((global_cx, global_cy), (fr * 2.0, fr * 2.0), 0.0)
+                    refined_count += 1
+
+                    if coverage < 0.68:
+                        p.is_occluded = True
+                        p.visibility_ratio = round(coverage, 2)
+                        occluded_count += 1
+
+        refined_pipes.append(p)
+
+    return refined_pipes, refined_count, occluded_count
+
+
+def find_occluded_background_pipes(
+    image: np.ndarray,
+    known_pipes: List[PipeDetection],
+    min_arc_points: int = 14,
+) -> List[PipeDetection]:
+    """
+    Discovers candidate pipes in the background (partially occluded by foreground pipes)
+    using residual edge arcs not accounted for by foreground pipes.
+    Returns new PipeDetection items (id=0).
+    """
+    if image is None or not known_pipes:
+        return []
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+    h_img, w_img = gray.shape[:2]
+
+    diams = [p.diameter for p in known_pipes if p.is_selected]
+    if not diams:
+        return []
+    median_r = float(np.median(diams)) / 2.0
+
+    # Build mask of foreground pipe interiors
+    known_mask = np.zeros((h_img, w_img), dtype=np.uint8)
+    for p in known_pipes:
+        cv2.circle(
+            known_mask,
+            (int(round(p.cx)), int(round(p.cy))),
+            int(round(p.avg_radius * 0.85)),
+            255,
+            -1,
+        )
+
+    clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+    enhanced = clahe.apply(gray)
+    blurred = cv2.bilateralFilter(enhanced, d=7, sigmaColor=35, sigmaSpace=7)
+    med = float(np.median(blurred))
+    edges = cv2.Canny(blurred, int(max(10, 0.66 * med)), int(max(30, 1.33 * med)))
+
+    residual_edges = cv2.bitwise_and(edges, edges, mask=cv2.bitwise_not(known_mask))
+    contours, _ = cv2.findContours(residual_edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+
+    candidates: List[PipeDetection] = []
+    for cnt in contours:
+        pts = cnt.reshape(-1, 2)
+        if len(pts) < min_arc_points:
+            continue
+
+        fit = ransac_circle_fit(pts, max_iterations=30, dist_threshold=1.5)
+        if fit is None:
+            continue
+        xc, yc, r, inliers, inlier_ratio, coverage = fit
+
+        # Must match expected pipe radius distribution
+        if not (0.70 * median_r <= r <= 1.35 * median_r):
+            continue
+
+        # Must lie inside image bounds
+        if not (r <= xc <= w_img - r and r <= yc <= h_img - r):
+            continue
+
+        # Must not duplicate an existing pipe center
+        center_dist = min(math.hypot(xc - p.cx, yc - p.cy) for p in known_pipes)
+        if center_dist < median_r * 0.82:
+            continue
+
+        # Must be occluded by at least one foreground pipe
+        occluding_pipe = None
+        for p in known_pipes:
+            d = math.hypot(xc - p.cx, yc - p.cy)
+            if d < r + p.avg_radius and d > abs(r - p.avg_radius) * 0.4:
+                occluding_pipe = p
+                break
+
+        if occluding_pipe is not None and coverage >= 0.22:
+            d = 2.0 * r
+            cand = PipeDetection(
+                id=0,
+                cx=float(xc),
+                cy=float(yc),
+                width=d,
+                height=d,
+                angle=0.0,
+                area=float(math.pi * r * r),
+                solidity=round(inlier_ratio, 3),
+                confidence=0.55,
+                is_selected=True,
+                is_manual=False,
+                category="Green",
+                ellipse=((float(xc), float(yc)), (d, d), 0.0),
+                is_occluded=True,
+                visibility_ratio=round(coverage, 2),
+                occluded_by=occluding_pipe.id,
+            )
+            # Check against already found candidates
+            if not any(is_duplicate_detection(cand, q, dup_ratio=0.85, center_frac=0.55) for q in candidates):
+                candidates.append(cand)
+
+    return candidates
+
+
 def clamp_crop_rect(*args, min_size: int = 8, **kwargs) -> Optional[Tuple[int, int, int, int]]:
     """
     Normalizes a (possibly negative-size) rectangle to integer image bounds.
@@ -708,6 +1002,7 @@ class PipeCounterEngine:
         num_sizes: int = 1,
         auto_confidence: bool = False,
         detect_nested: bool = False,
+        detect_occluded: bool = True,
     ) -> DetectionSummary:
         """
         Executes pipe detection with initial size categorization.
@@ -716,6 +1011,8 @@ class PipeCounterEngine:
                          from the score distribution (`auto_confidence_threshold`).
         detect_nested:   raise YOLO NMS IoU, apply nested-aware dedupe and the classical
                          Hough fallback for pipes sleeved inside larger pipes.
+        detect_occluded: sub-pixel RANSAC arc curvature fitting to restore squished
+                         diameters and discover partially occluded / stacked background pipes.
         """
         t0 = time.time()
         orig_h, orig_w = image.shape[:2]
@@ -727,7 +1024,7 @@ class PipeCounterEngine:
 
         if model is not None:
             yolo_conf = AUTO_CONF_PROBE if auto_confidence else float(confidence_threshold)
-            yolo_iou = max(float(iou_threshold), NESTED_YOLO_IOU) if detect_nested else float(iou_threshold)
+            yolo_iou = max(float(iou_threshold), NESTED_YOLO_IOU) if (detect_nested or detect_occluded) else float(iou_threshold)
             results = model.predict(
                 image,
                 conf=yolo_conf,
@@ -772,6 +1069,14 @@ class PipeCounterEngine:
                 pipes = nested_aware_dedupe(pipes)
                 pipes.extend(find_nested_inner_circles(image, pipes))
 
+            # Arc curvature refinement & background pipe discovery
+            if detect_occluded:
+                pipes, _, _ = refine_pipe_rims(image, pipes)
+                background_candidates = find_occluded_background_pipes(image, pipes)
+                if background_candidates:
+                    pipes.extend(background_candidates)
+                pipes = nested_aware_dedupe(pipes)
+
         row_height = max(15, int(orig_h * 0.04))
         pipes.sort(key=lambda p: (round(p.cy / row_height), p.cx))
 
@@ -780,6 +1085,20 @@ class PipeCounterEngine:
 
         if detect_nested:
             assign_nesting(pipes)
+
+        # Associate occluded pipes with their foreground occluding pipe
+        if detect_occluded:
+            for p in pipes:
+                if p.is_occluded and p.occluded_by is None:
+                    best_fg = None
+                    best_dist = math.inf
+                    for q in pipes:
+                        if q is not p and not q.is_occluded:
+                            d = math.hypot(p.cx - q.cx, p.cy - q.cy)
+                            if d < p.avg_radius + q.avg_radius and d < best_dist:
+                                best_dist = d
+                                best_fg = q.id
+                    p.occluded_by = best_fg
 
         stats, active_k, split, auto_k = cls.classify_sizes_ex(
             pipes, num_sizes=num_sizes, img_w=orig_w, img_h=orig_h
@@ -804,6 +1123,7 @@ class PipeCounterEngine:
             confidence_used=used_conf,
             auto_confidence=bool(auto_confidence),
             nested_detection=bool(detect_nested),
+            detect_occluded=bool(detect_occluded),
         )
 
     @classmethod
@@ -864,6 +1184,7 @@ class PipeCounterEngine:
             ["Processing Time", f"{summary.processing_time_ms:.1f} ms"],
             ["Confidence Threshold", f"{summary.confidence_used * 100:.0f}% ({'Auto' if summary.auto_confidence else 'Manual'})"],
             ["Nested Pipe Detection", f"{'On' if summary.nested_detection else 'Off'} ({summary.nested_count} nested pipes)"],
+            ["Stacked / Occluded Pipes", f"{'On' if summary.detect_occluded else 'Off'} ({summary.occluded_count} partially occluded pipes with reconstructed Ø)"],
             ["Size Tiers", f"{summary.active_k} ({'Manual split' if summary.manual_split else ('Auto' if summary.num_sizes == 0 else 'Fixed')})"],
             ["Size Split Thresholds (Ø px)", ", ".join(f"{t:.1f}" for t in summary.split_thresholds) or "-"],
             ["Total Pipes Counted", summary.selected_count],
@@ -891,6 +1212,8 @@ class PipeCounterEngine:
                 "Confidence": round(p.confidence, 3),
                 "Source": "Manual Draw" if p.is_manual else "AI Detected",
                 "Nested In (Pipe ID)": p.nested_in if p.nested_in is not None else "",
+                "Stacked / Occluded": f"Yes (~{int(p.visibility_ratio * 100)}% visible)" if p.is_occluded else "No (Full Rim)",
+                "Occluded By (Pipe ID)": p.occluded_by if p.occluded_by is not None else "",
             }
             if summary.crop_rect:
                 rec["Center X (original px)"] = round(p.cx + ox, 2)

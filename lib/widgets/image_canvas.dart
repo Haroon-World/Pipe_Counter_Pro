@@ -1064,6 +1064,22 @@ class PipeOverlayPainter extends CustomPainter {
           canvas.drawOval(ellipseRect.deflate(2.0), innerGlow);
 
           canvas.drawCircle(Offset.zero, 2.2, Paint()..color = const Color(0xFF38BDF8));
+        } else if (pipe.isOccluded) {
+          // Occluded / Stacked Pipe: Draw solid base ring and an outer lavender halo to signify reconstructed diameter
+          final outlinePaint = Paint()
+            ..color = baseColor
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = math.max(1.0, 1.2 * scale).clamp(1.0, 1.6)
+            ..isAntiAlias = true;
+          canvas.drawOval(ellipseRect, outlinePaint);
+
+          final occHalo = Paint()
+            ..color = const Color(0xFFC084FC)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1.2;
+          canvas.drawOval(ellipseRect.inflate(2.0), occHalo);
+
+          canvas.drawCircle(Offset.zero, 1.8, Paint()..color = const Color(0xFFC084FC));
         } else {
           // Standard pipe ring
           final outlinePaint = Paint()

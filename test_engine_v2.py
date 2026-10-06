@@ -17,6 +17,10 @@ from pipe_counter_engine import (
     assign_nesting,
     find_nested_inner_circles,
     clamp_crop_rect,
+    fit_circle_taubin,
+    ransac_circle_fit,
+    refine_pipe_rims,
+    find_occluded_background_pipes,
 )
 
 class TestPipeCounterEngineV2(unittest.TestCase):
@@ -103,6 +107,45 @@ class TestPipeCounterEngineV2(unittest.TestCase):
         self.assertAlmostEqual(inner.cx, 80.0, delta=4.0)
         self.assertAlmostEqual(inner.cy, 80.0, delta=4.0)
         self.assertAlmostEqual(inner.avg_radius, 22.0, delta=4.0)
+
+    def test_fit_circle_taubin_clean(self):
+        # Generate clean circle points
+        theta = np.linspace(0, 2 * np.pi, 30, endpoint=False)
+        pts = np.column_stack([50.0 + 15.0 * np.cos(theta), 70.0 + 15.0 * np.sin(theta)])
+        res = fit_circle_taubin(pts)
+        self.assertIsNotNone(res)
+        xc, yc, r = res
+        self.assertAlmostEqual(xc, 50.0, places=2)
+        self.assertAlmostEqual(yc, 70.0, places=2)
+        self.assertAlmostEqual(r, 15.0, places=2)
+
+    def test_ransac_circle_fit_partial_arc(self):
+        # Generate 120-degree partial arc (representing an occluded pipe)
+        theta = np.linspace(-np.pi / 3, np.pi / 3, 35)
+        xs = 100.0 + 20.0 * np.cos(theta)
+        ys = 100.0 + 20.0 * np.sin(theta)
+        pts = np.column_stack([xs, ys])
+
+        res = ransac_circle_fit(pts, max_iterations=40, dist_threshold=1.5)
+        self.assertIsNotNone(res)
+        xc, yc, r, inliers, inlier_ratio, coverage = res
+        self.assertAlmostEqual(xc, 100.0, delta=0.5)
+        self.assertAlmostEqual(yc, 100.0, delta=0.5)
+        self.assertAlmostEqual(r, 20.0, delta=0.5)
+        self.assertTrue(0.25 <= coverage <= 0.45)
+
+    def test_refine_and_occlusion_real_image(self):
+        img_path = "assets/real_pipes_test.jpg"
+        if os.path.exists(img_path):
+            img = cv2.imread(img_path)
+            res = PipeCounterEngine.detect(
+                img, confidence_threshold=0.30, detect_nested=True, detect_occluded=True
+            )
+            self.assertGreater(res.total_count, 150)
+            self.assertTrue(res.detect_occluded)
+            # Should have found partially occluded pipes
+            self.assertGreater(res.occluded_count, 0)
+            self.assertGreater(res.total_count, res.occluded_count)
 
 if __name__ == "__main__":
     unittest.main()

@@ -86,6 +86,9 @@ class PipeDetection {
   final bool isSelected; // True = active/counted, False = deselected/excluded
   final bool isManual; // True if manually added by user
   final int? nestedInId; // ID of the outer pipe if this pipe is nested/inside another pipe
+  final bool isOccluded; // True if partially hidden by a foreground pipe (front/back stacking)
+  final double visibilityRatio; // Estimated visible fraction of circular rim (0.20..1.0)
+  final int? occludedById; // ID of the foreground pipe that occludes this one
 
   const PipeDetection({
     required this.id,
@@ -101,6 +104,9 @@ class PipeDetection {
     this.isSelected = true,
     this.isManual = false,
     this.nestedInId,
+    this.isOccluded = false,
+    this.visibilityRatio = 1.0,
+    this.occludedById,
   });
 
   /// Approximate diameter based on average of width and height
@@ -133,6 +139,9 @@ class PipeDetection {
     bool? isSelected,
     bool? isManual,
     int? nestedInId,
+    bool? isOccluded,
+    double? visibilityRatio,
+    int? occludedById,
   }) {
     return PipeDetection(
       id: id ?? this.id,
@@ -148,6 +157,9 @@ class PipeDetection {
       isSelected: isSelected ?? this.isSelected,
       isManual: isManual ?? this.isManual,
       nestedInId: nestedInId ?? this.nestedInId,
+      isOccluded: isOccluded ?? this.isOccluded,
+      visibilityRatio: visibilityRatio ?? this.visibilityRatio,
+      occludedById: occludedById ?? this.occludedById,
     );
   }
 
@@ -171,6 +183,9 @@ class PipeDetection {
       isSelected: isSelected,
       isManual: isManual,
       nestedInId: nestedInId,
+      isOccluded: isOccluded,
+      visibilityRatio: visibilityRatio,
+      occludedById: occludedById,
     );
   }
 
@@ -189,6 +204,9 @@ class PipeDetection {
       'isSelected': isSelected,
       'isManual': isManual,
       'nestedInId': nestedInId,
+      'isOccluded': isOccluded,
+      'visibilityRatio': visibilityRatio,
+      'occludedById': occludedById,
     };
   }
 
@@ -217,6 +235,9 @@ class PipeDetection {
       isSelected: (map['isSelected'] as bool?) ?? true,
       isManual: (map['isManual'] as bool?) ?? false,
       nestedInId: map['nestedInId'] as int?,
+      isOccluded: (map['isOccluded'] as bool?) ?? false,
+      visibilityRatio: (map['visibilityRatio'] as num?)?.toDouble() ?? 1.0,
+      occludedById: map['occludedById'] as int?,
     );
   }
 }
