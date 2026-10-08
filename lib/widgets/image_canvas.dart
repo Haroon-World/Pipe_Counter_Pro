@@ -521,102 +521,110 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> with Tick
                 },
               ),
 
-            // Top Toolbar: Modern Frosted Glass Pill
+            // Top Toolbar: Modern Frosted Glass Pill (Horizontally scrollable and swipeable)
             Positioned(
               top: 12,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                decoration: BoxDecoration(
-                  color: const Color(0xEE1A1E26),
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
-                  boxShadow: const [
-                    BoxShadow(color: Colors.black54, blurRadius: 12, offset: Offset(0, 4)),
-                  ],
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _buildToolButton(
-                      tool: CanvasTool.pan,
-                      currentTool: state.selectedTool,
-                      icon: Icons.pan_tool_outlined,
-                      label: 'Pan',
-                      onPressed: () => notifier.setSelectedTool(CanvasTool.pan),
+              left: 8,
+              right: 8,
+              child: Center(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  physics: const BouncingScrollPhysics(),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: const Color(0xEE1A1E26),
+                      borderRadius: BorderRadius.circular(24),
+                      border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+                      boxShadow: const [
+                        BoxShadow(color: Colors.black54, blurRadius: 12, offset: Offset(0, 4)),
+                      ],
                     ),
-                    _buildToolButton(
-                      tool: CanvasTool.crop,
-                      currentTool: state.selectedTool,
-                      icon: Icons.crop,
-                      label: 'Crop ROI',
-                      onPressed: () => notifier.setSelectedTool(CanvasTool.crop),
-                    ),
-                    _buildToolButton(
-                      tool: CanvasTool.add,
-                      currentTool: state.selectedTool,
-                      icon: Icons.add_circle_outline,
-                      label: 'Add',
-                      badgeColor: state.activeAddCategory == PipeCategory.small
-                          ? const Color(0xFF22C55E)
-                          : (state.activeAddCategory == PipeCategory.medium ? const Color(0xFFEAB308) : const Color(0xFFEF4444)),
-                      onPressed: () => notifier.setSelectedTool(CanvasTool.add),
-                    ),
-                    _buildToolButton(
-                      tool: CanvasTool.delete,
-                      currentTool: state.selectedTool,
-                      icon: Icons.delete_outline,
-                      label: 'Delete',
-                      onPressed: () => notifier.setSelectedTool(CanvasTool.delete),
-                    ),
-                    _buildToolButton(
-                      tool: CanvasTool.select,
-                      currentTool: state.selectedTool,
-                      icon: Icons.touch_app_outlined,
-                      label: 'Toggle',
-                      onPressed: () => notifier.setSelectedTool(CanvasTool.select),
-                    ),
-                    Container(width: 1, height: 20, color: Colors.white24, margin: const EdgeInsets.symmetric(horizontal: 4)),
-                    InkWell(
-                      onTap: () => notifier.toggleShowNumbers(),
-                      borderRadius: BorderRadius.circular(16),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                        decoration: BoxDecoration(
-                          color: state.showNumbers ? Colors.cyanAccent.withValues(alpha: 0.25) : Colors.transparent,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _buildToolButton(
+                          tool: CanvasTool.pan,
+                          currentTool: state.selectedTool,
+                          icon: Icons.pan_tool_outlined,
+                          label: 'Pan',
+                          onPressed: () => notifier.setSelectedTool(CanvasTool.pan),
+                        ),
+                        _buildToolButton(
+                          tool: CanvasTool.crop,
+                          currentTool: state.selectedTool,
+                          icon: Icons.crop,
+                          label: 'Crop ROI',
+                          onPressed: () => notifier.setSelectedTool(CanvasTool.crop),
+                        ),
+                        _buildToolButton(
+                          tool: CanvasTool.add,
+                          currentTool: state.selectedTool,
+                          icon: Icons.add_circle_outline,
+                          label: 'Add',
+                          badgeColor: state.activeAddCategory == PipeCategory.small
+                              ? const Color(0xFF22C55E)
+                              : (state.activeAddCategory == PipeCategory.medium ? const Color(0xFFEAB308) : const Color(0xFFEF4444)),
+                          onPressed: () => notifier.setSelectedTool(CanvasTool.add),
+                        ),
+                        _buildToolButton(
+                          tool: CanvasTool.delete,
+                          currentTool: state.selectedTool,
+                          icon: Icons.delete_outline,
+                          label: 'Delete',
+                          onPressed: () => notifier.setSelectedTool(CanvasTool.delete),
+                        ),
+                        _buildToolButton(
+                          tool: CanvasTool.select,
+                          currentTool: state.selectedTool,
+                          icon: Icons.touch_app_outlined,
+                          label: 'Toggle',
+                          onPressed: () => notifier.setSelectedTool(CanvasTool.select),
+                        ),
+                        Container(width: 1, height: 20, color: Colors.white24, margin: const EdgeInsets.symmetric(horizontal: 4)),
+                        InkWell(
+                          onTap: () => notifier.toggleShowNumbers(),
                           borderRadius: BorderRadius.circular(16),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.pin_outlined,
-                              size: 14,
-                              color: state.showNumbers ? Colors.cyanAccent : Colors.white60,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                            decoration: BoxDecoration(
+                              color: state.showNumbers ? Colors.cyanAccent.withValues(alpha: 0.25) : Colors.transparent,
+                              borderRadius: BorderRadius.circular(16),
                             ),
-                            const SizedBox(width: 3),
-                            Text(
-                              state.showNumbers ? '# ON' : '# OFF',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: state.showNumbers ? FontWeight.bold : FontWeight.normal,
-                                color: state.showNumbers ? Colors.cyanAccent : Colors.white60,
-                              ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.pin_outlined,
+                                  size: 14,
+                                  color: state.showNumbers ? Colors.cyanAccent : Colors.white60,
+                                ),
+                                const SizedBox(width: 3),
+                                Text(
+                                  state.showNumbers ? '# ON' : '# OFF',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: state.showNumbers ? FontWeight.bold : FontWeight.normal,
+                                    color: state.showNumbers ? Colors.cyanAccent : Colors.white60,
+                                  ),
+                                ),
+                              ],
                             ),
-                          ],
+                          ),
                         ),
-                      ),
+                        if (state.canUndo) ...[
+                          Container(width: 1, height: 20, color: Colors.white24, margin: const EdgeInsets.symmetric(horizontal: 4)),
+                          IconButton(
+                            icon: const Icon(Icons.undo, color: Colors.white, size: 18),
+                            tooltip: 'Undo Last Action',
+                            onPressed: () => notifier.undo(),
+                            constraints: const BoxConstraints(minWidth: 34, minHeight: 32),
+                            padding: EdgeInsets.zero,
+                          ),
+                        ],
+                      ],
                     ),
-                    if (state.canUndo) ...[
-                      Container(width: 1, height: 20, color: Colors.white24, margin: const EdgeInsets.symmetric(horizontal: 4)),
-                      IconButton(
-                        icon: const Icon(Icons.undo, color: Colors.white, size: 18),
-                        tooltip: 'Undo Last Action',
-                        onPressed: () => notifier.undo(),
-                        constraints: const BoxConstraints(minWidth: 34, minHeight: 32),
-                        padding: EdgeInsets.zero,
-                      ),
-                    ],
-                  ],
+                  ),
                 ),
               ),
             ),
@@ -625,44 +633,52 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> with Tick
             if (state.selectedTool == CanvasTool.add)
               Positioned(
                 top: 64,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: const Color(0xEE1E222A),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: Colors.white24),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _buildAddColorChip(notifier, state.activeAddCategory, PipeCategory.small, '🟢 Small', const Color(0xFF22C55E)),
-                      const SizedBox(width: 6),
-                      _buildAddColorChip(notifier, state.activeAddCategory, PipeCategory.medium, '🟡 Med', const Color(0xFFEAB308)),
-                      const SizedBox(width: 6),
-                      _buildAddColorChip(notifier, state.activeAddCategory, PipeCategory.large, '🔴 Large', const Color(0xFFEF4444)),
-                      const SizedBox(width: 10),
-                      Container(width: 1, height: 18, color: Colors.white24),
-                      const SizedBox(width: 8),
-                      GestureDetector(
-                        onTap: () {
-                          notifier.setManualAddRadius(state.manualAddRadius - 5);
-                        },
-                        child: const Icon(Icons.remove_circle_outline, color: Colors.white70, size: 18),
+                left: 8,
+                right: 8,
+                child: Center(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    physics: const BouncingScrollPhysics(),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xEE1E222A),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: Colors.white24),
                       ),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 6),
-                        child: Text(
-                          '${state.manualAddRadius.toInt()}px',
-                          style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
-                        ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _buildAddColorChip(notifier, state.activeAddCategory, PipeCategory.small, '🟢 Small', const Color(0xFF22C55E)),
+                          const SizedBox(width: 6),
+                          _buildAddColorChip(notifier, state.activeAddCategory, PipeCategory.medium, '🟡 Med', const Color(0xFFEAB308)),
+                          const SizedBox(width: 6),
+                          _buildAddColorChip(notifier, state.activeAddCategory, PipeCategory.large, '🔴 Large', const Color(0xFFEF4444)),
+                          const SizedBox(width: 10),
+                          Container(width: 1, height: 18, color: Colors.white24),
+                          const SizedBox(width: 8),
+                          GestureDetector(
+                            onTap: () {
+                              notifier.setManualAddRadius(state.manualAddRadius - 5);
+                            },
+                            child: const Icon(Icons.remove_circle_outline, color: Colors.white70, size: 18),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 6),
+                            child: Text(
+                              '${state.manualAddRadius.toInt()}px',
+                              style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          GestureDetector(
+                            onTap: () {
+                              notifier.setManualAddRadius(state.manualAddRadius + 5);
+                            },
+                            child: const Icon(Icons.add_circle_outline, color: Colors.white70, size: 18),
+                          ),
+                        ],
                       ),
-                      GestureDetector(
-                        onTap: () {
-                          notifier.setManualAddRadius(state.manualAddRadius + 5);
-                        },
-                        child: const Icon(Icons.add_circle_outline, color: Colors.white70, size: 18),
-                      ),
-                    ],
+                    ),
                   ),
                 ),
               ),
@@ -670,8 +686,14 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> with Tick
             // Crop Action Floating Bar when Crop Tool is active
             if (isCropMode)
               Positioned(
-                bottom: 24,
-                child: Container(
+                top: 64,
+                left: 8,
+                right: 8,
+                child: Center(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    physics: const BouncingScrollPhysics(),
+                    child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   decoration: BoxDecoration(
                     color: const Color(0xFA1E222A),
@@ -724,25 +746,31 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> with Tick
                   ),
                 ),
               ),
+            ),
+          ),
 
             // Mode hint indicator banner
             if (!isCropMode && state.selectedTool != CanvasTool.pan && !state.isProcessing)
               Positioned(
                 bottom: 20,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.85),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: Colors.white24),
-                  ),
-                  child: Text(
-                    state.selectedTool == CanvasTool.add
-                        ? '👉 Tap anywhere on image to add a pipe circle'
-                        : (state.selectedTool == CanvasTool.delete
-                            ? '👉 Tap any pipe circle to delete it'
-                            : '👉 Tap any pipe to toggle Active/Excluded'),
-                    style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+                left: 16,
+                right: 16,
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.85),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: Colors.white24),
+                    ),
+                    child: Text(
+                      state.selectedTool == CanvasTool.add
+                          ? '👉 Tap anywhere on image to add a pipe circle'
+                          : (state.selectedTool == CanvasTool.delete
+                              ? '👉 Tap any pipe circle to delete it'
+                              : '👉 Tap any pipe to toggle Active/Excluded'),
+                      style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+                    ),
                   ),
                 ),
               ),

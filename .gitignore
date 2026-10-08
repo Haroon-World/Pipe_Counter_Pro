@@ -5,6 +5,14 @@
 # PyInstaller / Build Artifacts (NEVER COMMIT 1GB BINARIES TO GIT)
 dist/
 build/
+old_version/PipeCounterPro_v1.0.0/
+desktop_v2_new/dist/
+desktop_v2_new/build/
+desktop_v2_new/dist_installer/
+android_version/build/
+android_version/.dart_tool/
+android_version/.flutter-plugins
+android_version/.flutter-plugins-dependencies
 *.spec.bak
 *.exe
 *.dll

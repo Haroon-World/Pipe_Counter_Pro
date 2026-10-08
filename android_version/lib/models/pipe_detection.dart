@@ -1,0 +1,479 @@
+import 'dart:math' as math;
+
+enum PipeCategory {
+  small,
+  medium,
+  large;
+
+  String get displayName {
+    switch (this) {
+      case PipeCategory.small:
+        return 'Small';
+      case PipeCategory.medium:
+        return 'Medium';
+      case PipeCategory.large:
+        return 'Large';
+    }
+  }
+
+  String get labelWithColor {
+    switch (this) {
+      case PipeCategory.small:
+        return 'Small (Green)';
+      case PipeCategory.medium:
+        return 'Medium (Yellow)';
+      case PipeCategory.large:
+        return 'Large (Red)';
+    }
+  }
+
+  String get colorHex {
+    switch (this) {
+      case PipeCategory.small:
+        return '#22c55e';
+      case PipeCategory.medium:
+        return '#eab308';
+      case PipeCategory.large:
+        return '#ef4444';
+    }
+  }
+}
+
+enum SizeTierMode {
+  uniform,
+  twoSizes,
+  threeSizes,
+  autoDetect;
+
+  String get displayName {
+    switch (this) {
+      case SizeTierMode.uniform:
+        return '🟢 Uniform (All Green)';
+      case SizeTierMode.twoSizes:
+        return '🟢🔴 2 Types (Small / Large)';
+      case SizeTierMode.threeSizes:
+        return '🟢🟡🔴 3 Types (Small / Med / Large)';
+      case SizeTierMode.autoDetect:
+        return '⚡ Smart Auto-Detect';
+    }
+  }
+
+  String get shortLabel {
+    switch (this) {
+      case SizeTierMode.uniform:
+        return 'Uniform';
+      case SizeTierMode.twoSizes:
+        return '2 Types';
+      case SizeTierMode.threeSizes:
+        return '3 Types';
+      case SizeTierMode.autoDetect:
+        return 'Auto';
+    }
+  }
+}
+
+class PipeDetection {
+  final int id;
+  final double cx;
+  final double cy;
+  final double width;
+  final double height;
+  final double angle; // in degrees (-90 to +90)
+  final double area; // in px^2
+  final PipeCategory category;
+  final double confidence;
+  final double solidity; // contourArea / convexHullArea (0.0 to 1.0)
+  final bool isSelected; // True = active/counted, False = deselected/excluded
+  final bool isManual; // True if manually added by user
+  final int? nestedInId; // ID of the outer pipe if this pipe is nested/inside another pipe
+  final bool isOccluded; // True if partially hidden by a foreground pipe (front/back stacking)
+  final double visibilityRatio; // Estimated visible fraction of circular rim (0.20..1.0)
+  final int? occludedById; // ID of the foreground pipe that occludes this one
+
+  const PipeDetection({
+    required this.id,
+    required this.cx,
+    required this.cy,
+    required this.width,
+    required this.height,
+    required this.angle,
+    required this.area,
+    this.category = PipeCategory.small,
+    this.confidence = 1.0,
+    this.solidity = 1.0,
+    this.isSelected = true,
+    this.isManual = false,
+    this.nestedInId,
+    this.isOccluded = false,
+    this.visibilityRatio = 1.0,
+    this.occludedById,
+  });
+
+  /// Approximate diameter based on average of width and height
+  double get diameter => (width + height) / 2.0;
+
+  /// Approximate radius based on average of semi-axes
+  double get averageRadius => diameter / 2.0;
+
+  /// Whether this pipe is nested inside an outer pipe
+  bool get isNested => nestedInId != null;
+
+  /// Aspect ratio: minor axis / major axis (0.0 to 1.0)
+  double get aspectRatio {
+    final major = math.max(width, height);
+    final minor = math.min(width, height);
+    return major > 0 ? (minor / major) : 1.0;
+  }
+
+  PipeDetection copyWith({
+    int? id,
+    double? cx,
+    double? cy,
+    double? width,
+    double? height,
+    double? angle,
+    double? area,
+    PipeCategory? category,
+    double? confidence,
+    double? solidity,
+    bool? isSelected,
+    bool? isManual,
+    int? nestedInId,
+    bool? isOccluded,
+    double? visibilityRatio,
+    int? occludedById,
+  }) {
+    return PipeDetection(
+      id: id ?? this.id,
+      cx: cx ?? this.cx,
+      cy: cy ?? this.cy,
+      width: width ?? this.width,
+      height: height ?? this.height,
+      angle: angle ?? this.angle,
+      area: area ?? this.area,
+      category: category ?? this.category,
+      confidence: confidence ?? this.confidence,
+      solidity: solidity ?? this.solidity,
+      isSelected: isSelected ?? this.isSelected,
+      isManual: isManual ?? this.isManual,
+      nestedInId: nestedInId ?? this.nestedInId,
+      isOccluded: isOccluded ?? this.isOccluded,
+      visibilityRatio: visibilityRatio ?? this.visibilityRatio,
+      occludedById: occludedById ?? this.occludedById,
+    );
+  }
+
+  /// Scale detection coordinates by a factor (e.g., from processed thumbnail to original size)
+  PipeDetection scaled(double factor) {
+    if (factor == 1.0) return this;
+    final newWidth = width * factor;
+    final newHeight = height * factor;
+    final newArea = math.pi * (newWidth / 2.0) * (newHeight / 2.0);
+    return PipeDetection(
+      id: id,
+      cx: cx * factor,
+      cy: cy * factor,
+      width: newWidth,
+      height: newHeight,
+      angle: angle,
+      area: newArea,
+      category: category,
+      confidence: confidence,
+      solidity: solidity,
+      isSelected: isSelected,
+      isManual: isManual,
+      nestedInId: nestedInId,
+      isOccluded: isOccluded,
+      visibilityRatio: visibilityRatio,
+      occludedById: occludedById,
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'cx': cx,
+      'cy': cy,
+      'width': width,
+      'height': height,
+      'angle': angle,
+      'area': area,
+      'category': category.name,
+      'confidence': confidence,
+      'solidity': solidity,
+      'isSelected': isSelected,
+      'isManual': isManual,
+      'nestedInId': nestedInId,
+      'isOccluded': isOccluded,
+      'visibilityRatio': visibilityRatio,
+      'occludedById': occludedById,
+    };
+  }
+
+  factory PipeDetection.fromMap(Map<String, dynamic> map) {
+    PipeCategory cat;
+    final catStr = (map['category'] as String?)?.toLowerCase();
+    if (catStr == 'large') {
+      cat = PipeCategory.large;
+    } else if (catStr == 'medium') {
+      cat = PipeCategory.medium;
+    } else {
+      cat = PipeCategory.small;
+    }
+
+    return PipeDetection(
+      id: map['id'] as int,
+      cx: (map['cx'] as num).toDouble(),
+      cy: (map['cy'] as num).toDouble(),
+      width: (map['width'] as num).toDouble(),
+      height: (map['height'] as num).toDouble(),
+      angle: (map['angle'] as num).toDouble(),
+      area: (map['area'] as num).toDouble(),
+      category: cat,
+      confidence: (map['confidence'] as num?)?.toDouble() ?? 1.0,
+      solidity: (map['solidity'] as num?)?.toDouble() ?? 1.0,
+      isSelected: (map['isSelected'] as bool?) ?? true,
+      isManual: (map['isManual'] as bool?) ?? false,
+      nestedInId: map['nestedInId'] as int?,
+      isOccluded: (map['isOccluded'] as bool?) ?? false,
+      visibilityRatio: (map['visibilityRatio'] as num?)?.toDouble() ?? 1.0,
+      occludedById: map['occludedById'] as int?,
+    );
+  }
+}
+
+class DetectionResult {
+  final List<PipeDetection> pipes;
+  final int imageWidth;
+  final int imageHeight;
+  final Duration processingTime;
+  final String engineName;
+  final double currentThreshold;
+
+  const DetectionResult({
+    required this.pipes,
+    required this.imageWidth,
+    required this.imageHeight,
+    required this.processingTime,
+    required this.engineName,
+    required this.currentThreshold,
+  });
+
+  /// Total count of all marked pipes
+  int get totalCount => pipes.length;
+
+  /// Active (counted) pipes
+  int get activeCount => pipes.where((p) => p.isSelected).length;
+
+  /// Deselected / excluded pipes
+  int get deselectedCount => pipes.where((p) => !p.isSelected).length;
+
+  int get smallCount =>
+      pipes.where((p) => p.isSelected && p.category == PipeCategory.small).length;
+
+  int get mediumCount =>
+      pipes.where((p) => p.isSelected && p.category == PipeCategory.medium).length;
+
+  int get largeCount =>
+      pipes.where((p) => p.isSelected && p.category == PipeCategory.large).length;
+
+  /// Count of pipes nested/sleeved inside larger pipes
+  int get nestedCount =>
+      pipes.where((p) => p.isSelected && p.isNested).length;
+
+  double get minArea {
+    if (pipes.isEmpty) return 0.0;
+    return pipes.map((p) => p.area).reduce(math.min);
+  }
+
+  double get maxArea {
+    if (pipes.isEmpty) return 1000.0;
+    return pipes.map((p) => p.area).reduce(math.max);
+  }
+
+  double get medianArea {
+    if (pipes.isEmpty) return 500.0;
+    final sorted = pipes.map((p) => p.area).toList()..sort();
+    final mid = sorted.length ~/ 2;
+    if (sorted.length % 2 == 1) {
+      return sorted[mid];
+    } else {
+      return (sorted[mid - 1] + sorted[mid]) / 2.0;
+    }
+  }
+
+  /// Computes the optimal threshold (in px^2 area) separating small from large pipes
+  /// using 1D Otsu / minimum between-class variance on active pipes.
+  double computeOptimalSplitThreshold() {
+    if (pipes.length < 2) return medianArea;
+    final activeAreas = pipes.where((p) => p.isSelected).map((p) => p.area).toList()..sort();
+    if (activeAreas.length < 2) return medianArea;
+
+    double bestThresh = medianArea;
+    double maxBetweenVariance = -1.0;
+    final total = activeAreas.length;
+    final totalSum = activeAreas.reduce((a, b) => a + b);
+
+    double sumB = 0.0;
+    int weightB = 0;
+
+    for (int i = 0; i < total - 1; i++) {
+      weightB++;
+      final weightF = total - weightB;
+      if (weightF == 0) break;
+
+      sumB += activeAreas[i];
+      final sumF = totalSum - sumB;
+
+      final meanB = sumB / weightB;
+      final meanF = sumF / weightF;
+
+      final betweenVariance = weightB * weightF * (meanB - meanF) * (meanB - meanF);
+      if (betweenVariance > maxBetweenVariance) {
+        maxBetweenVariance = betweenVariance;
+        bestThresh = (activeAreas[i] + activeAreas[i + 1]) / 2.0;
+      }
+    }
+    return bestThresh;
+  }
+
+  /// Instantly recalculate categories based on a size threshold
+  DetectionResult reclassifiedWithThreshold(double threshold) {
+    final updated = pipes.map((p) {
+      // Keep manual user colors intact unless reclassified
+      if (p.isManual) return p;
+      final cat = p.area < threshold ? PipeCategory.small : PipeCategory.large;
+      return p.copyWith(category: cat);
+    }).toList();
+
+    return copyWith(
+      pipes: updated,
+      currentThreshold: threshold,
+    );
+  }
+
+  /// Reclassifies all detected pipes according to the chosen size tier mode
+  DetectionResult reclassifiedWithSizeTiers(SizeTierMode mode) {
+    if (pipes.isEmpty) return this;
+
+    final targetPipes = pipes.where((p) => !p.isManual).toList();
+    if (targetPipes.isEmpty) return this;
+
+    final diams = targetPipes.map((p) => p.diameter).toList()..sort();
+    final meanDiam = diams.reduce((a, b) => a + b) / diams.length;
+    double varSum = 0;
+    for (final d in diams) {
+      varSum += (d - meanDiam) * (d - meanDiam);
+    }
+    final stdDiam = math.sqrt(varSum / diams.length);
+    final cv = meanDiam > 0 ? (stdDiam / meanDiam) : 0.0;
+
+    SizeTierMode effectiveMode = mode;
+    double updatedThreshold = currentThreshold;
+
+    if (effectiveMode == SizeTierMode.autoDetect) {
+      final diamRange = diams.last - diams.first;
+      // If coefficient of variation is high or clear spread exists, auto-detect 2 sizes
+      if (cv < 0.12 || diamRange < 6.0) {
+        effectiveMode = SizeTierMode.uniform;
+      } else {
+        effectiveMode = SizeTierMode.twoSizes;
+        updatedThreshold = computeOptimalSplitThreshold();
+      }
+    }
+
+    final updated = pipes.map((p) {
+      if (p.isManual) return p; // Preserve user's manual color choice
+
+      PipeCategory newCat;
+      switch (effectiveMode) {
+        case SizeTierMode.uniform:
+          newCat = PipeCategory.small; // All Green
+          break;
+
+        case SizeTierMode.twoSizes:
+          if (updatedThreshold > 0) {
+            newCat = p.area <= updatedThreshold ? PipeCategory.small : PipeCategory.large;
+          } else {
+            final medianDiam = diams[diams.length ~/ 2];
+            newCat = p.diameter <= medianDiam ? PipeCategory.small : PipeCategory.large;
+          }
+          break;
+
+        case SizeTierMode.threeSizes:
+          final p33 = diams[diams.length ~/ 3];
+          final p66 = diams[(diams.length * 2) ~/ 3];
+          if (p.diameter <= p33) {
+            newCat = PipeCategory.small; // Green
+          } else if (p.diameter <= p66) {
+            newCat = PipeCategory.medium; // Yellow
+          } else {
+            newCat = PipeCategory.large; // Red
+          }
+          break;
+
+        case SizeTierMode.autoDetect:
+          newCat = PipeCategory.small;
+          break;
+      }
+      return p.copyWith(category: newCat);
+    }).toList();
+
+    return copyWith(
+      pipes: updated,
+      currentThreshold: updatedThreshold,
+    );
+  }
+
+  /// Toggle active/excluded state for a pipe
+  DetectionResult withPipeToggled(int id) {
+    final updated = pipes.map((p) {
+      if (p.id == id) {
+        return p.copyWith(isSelected: !p.isSelected);
+      }
+      return p;
+    }).toList();
+    return copyWith(pipes: updated);
+  }
+
+  /// Remove a pipe
+  DetectionResult withPipeRemoved(int id) {
+    final updated = pipes.where((p) => p.id != id).toList();
+    return copyWith(pipes: updated);
+  }
+
+  /// Add a manual pipe
+  DetectionResult withPipeAdded(PipeDetection pipe) {
+    final updated = List<PipeDetection>.from(pipes)..add(pipe);
+    return copyWith(pipes: updated);
+  }
+
+  /// Change a pipe's category
+  DetectionResult withPipeRecolored(int id, PipeCategory newCategory) {
+    final updated = pipes.map((p) {
+      if (p.id == id) {
+        return p.copyWith(category: newCategory);
+      }
+      return p;
+    }).toList();
+    return copyWith(pipes: updated);
+  }
+
+  DetectionResult copyWith({
+    List<PipeDetection>? pipes,
+    int? imageWidth,
+    int? imageHeight,
+    Duration? processingTime,
+    String? engineName,
+    double? currentThreshold,
+  }) {
+    return DetectionResult(
+      pipes: pipes ?? this.pipes,
+      imageWidth: imageWidth ?? this.imageWidth,
+      imageHeight: imageHeight ?? this.imageHeight,
+      processingTime: processingTime ?? this.processingTime,
+      engineName: engineName ?? this.engineName,
+      currentThreshold: currentThreshold ?? this.currentThreshold,
+    );
+  }
+}

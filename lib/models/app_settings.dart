@@ -20,8 +20,8 @@ class AppSettings {
   const AppSettings({
     this.engine = DetectionEngine.classicalCV,
     this.sensitivity = 0.50,
-    this.minRadius = 4.0,
-    this.maxRadius = 32.0,
+    this.minRadius = 8.0,
+    this.maxRadius = 140.0,
     this.solidityThreshold = 0.85,
     this.outlierFraction = 0.12,
     this.customModelPath,
