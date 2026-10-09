@@ -318,508 +318,485 @@ class _ImageCanvasWidgetState extends ConsumerState<ImageCanvasWidget> with Tick
     final state = ref.watch(detectionProvider);
     final notifier = ref.read(detectionProvider.notifier);
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final canvasW = constraints.maxWidth;
-        final canvasH = constraints.maxHeight;
+    final isPanMode = state.selectedTool == CanvasTool.pan;
+    final isCropMode = state.selectedTool == CanvasTool.crop;
 
-        final scaleX = canvasW / widget.imageWidth;
-        final scaleY = canvasH / widget.imageHeight;
-        final scale = math.min(scaleX, scaleY);
-
-        final renderedW = widget.imageWidth * scale;
-        final renderedH = widget.imageHeight * scale;
-
-        final isPanMode = state.selectedTool == CanvasTool.pan;
-        final isCropMode = state.selectedTool == CanvasTool.crop;
-
-        return Stack(
-          alignment: Alignment.center,
-          children: [
-            // Dark viewport background
-            Container(color: const Color(0xFF111318)),
-
-            // Interactive viewer for pinch zoom and pan
-            InteractiveViewer(
-              transformationController: _transformController,
-              minScale: 0.5,
-              maxScale: 10.0,
-              panEnabled: isPanMode,
-              scaleEnabled: !isCropMode,
-              boundaryMargin: const EdgeInsets.all(300),
-              child: Center(
-                child: SizedBox(
-                  width: renderedW,
-                  height: renderedH,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      // Base image
-                      Image.memory(
-                        widget.imageBytes,
-                        fit: BoxFit.fill,
-                        gaplessPlayback: true,
-                        filterQuality: FilterQuality.medium,
-                      ),
-
-                      // Ellipse & dot overlay
-                      CustomPaint(
-                        painter: PipeOverlayPainter(
-                          imageWidth: widget.imageWidth,
-                          imageHeight: widget.imageHeight,
-                          detections: widget.detections,
-                          scale: scale,
-                          showLabels: state.showNumbers,
-                        ),
-                      ),
-
-                      // Crop Viewport Overlay when Crop Tool is active
-                      if (isCropMode)
-                        CustomPaint(
-                          painter: CropOverlayPainter(
-                            cropNorm: _cropBoxNorm,
-                            renderedSize: Size(renderedW, renderedH),
-                          ),
-                        ),
-
-                      // Gesture overlay for manual interactions
-                      Positioned.fill(
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onPanStart: isCropMode
-                              ? (details) {
-                                  _onCropPanStart(details.localPosition, renderedW, renderedH);
-                                }
-                              : null,
-                          onPanUpdate: isCropMode
-                              ? (details) {
-                                  _onCropPanUpdate(details.localPosition, renderedW, renderedH);
-                                }
-                              : null,
-                          onPanEnd: isCropMode
-                              ? (_) {
-                                  _activeCropHandle = null;
-                                }
-                              : null,
-                          onTapUp: (details) {
-                            if (!state.isProcessing && !isCropMode) {
-                              _handleImageTap(details.localPosition, scale);
-                            }
-                          },
-                          onLongPressStart: (details) {
-                            if (!state.isProcessing && !isCropMode) {
-                              _handlePipeLongPress(details.localPosition, scale);
-                            }
-                          },
-                        ),
-                      ),
-
-                      // Real-time laser scanning line
-                      if (_showProgressCard)
-                        AnimatedBuilder(
-                          animation: _progressAnimController,
-                          builder: (context, child) {
-                            return Positioned(
-                              top: _progressAnimController.value * renderedH,
-                              left: 0,
-                              right: 0,
-                              child: Container(
-                                height: 3,
-                                decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                    colors: [
-                                      Colors.cyanAccent.withValues(alpha: 0.0),
-                                      Colors.cyanAccent,
-                                      Colors.cyanAccent.withValues(alpha: 0.0),
-                                    ],
-                                  ),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.cyanAccent.withValues(alpha: 0.8),
-                                      blurRadius: 10,
-                                      spreadRadius: 2,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                    ],
+    return Column(
+      children: [
+        // 1. Dedicated Top Navigation Toolbar Strip (NEVER covers or blocks the image!)
+        Container(
+          width: double.infinity,
+          color: const Color(0xFF151820),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          child: Center(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              physics: const BouncingScrollPhysics(),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _buildToolButton(
+                    tool: CanvasTool.pan,
+                    currentTool: state.selectedTool,
+                    icon: Icons.pan_tool_outlined,
+                    label: 'Pan',
+                    onPressed: () => notifier.setSelectedTool(CanvasTool.pan),
                   ),
-                ),
-              ),
-            ),
-
-            // Progress card in center
-            if (_showProgressCard)
-              AnimatedBuilder(
-                animation: _progressAnimController,
-                builder: (context, child) {
-                  final pct = (_progressAnimController.value * 100).clamp(0, 100).toInt();
-                  final isDone = pct >= 100;
-                  return Center(
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                      margin: const EdgeInsets.symmetric(horizontal: 28),
-                      decoration: BoxDecoration(
-                        color: const Color(0xEE1E222A),
-                        borderRadius: BorderRadius.circular(18),
-                        border: Border.all(
-                          color: (isDone ? Colors.greenAccent : Colors.cyanAccent).withValues(alpha: 0.7),
-                          width: 1.5,
-                        ),
-                        boxShadow: const [
-                          BoxShadow(color: Colors.black87, blurRadius: 20, offset: Offset(0, 6)),
-                        ],
-                      ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              SizedBox(
-                                width: 22,
-                                height: 22,
-                                child: isDone
-                                    ? const Icon(Icons.check_circle, color: Colors.greenAccent, size: 22)
-                                    : const CircularProgressIndicator(
-                                        strokeWidth: 2.5,
-                                        valueColor: AlwaysStoppedAnimation(Colors.cyanAccent),
-                                      ),
-                              ),
-                              const SizedBox(width: 12),
-                              Text(
-                                isDone ? 'AI Counting Pipes: Complete (100%)' : 'AI Counting Pipes ($pct%)',
-                                style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(6),
-                            child: LinearProgressIndicator(
-                              value: _progressAnimController.value,
-                              minHeight: 6,
-                              backgroundColor: Colors.white12,
-                              valueColor: AlwaysStoppedAnimation(
-                                isDone ? Colors.greenAccent : Colors.cyanAccent,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            _getDynamicStageText(pct),
-                            style: const TextStyle(color: Colors.white70, fontSize: 11),
-                            textAlign: TextAlign.center,
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                },
-              ),
-
-            // Top Toolbar: Modern Frosted Glass Pill (Horizontally scrollable and swipeable)
-            Positioned(
-              top: 12,
-              left: 8,
-              right: 8,
-              child: Center(
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  physics: const BouncingScrollPhysics(),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: const Color(0xEE1A1E26),
-                      borderRadius: BorderRadius.circular(24),
-                      border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
-                      boxShadow: const [
-                        BoxShadow(color: Colors.black54, blurRadius: 12, offset: Offset(0, 4)),
-                      ],
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _buildToolButton(
-                          tool: CanvasTool.pan,
-                          currentTool: state.selectedTool,
-                          icon: Icons.pan_tool_outlined,
-                          label: 'Pan',
-                          onPressed: () => notifier.setSelectedTool(CanvasTool.pan),
-                        ),
-                        _buildToolButton(
-                          tool: CanvasTool.crop,
-                          currentTool: state.selectedTool,
-                          icon: Icons.crop,
-                          label: 'Crop ROI',
-                          onPressed: () => notifier.setSelectedTool(CanvasTool.crop),
-                        ),
-                        _buildToolButton(
-                          tool: CanvasTool.add,
-                          currentTool: state.selectedTool,
-                          icon: Icons.add_circle_outline,
-                          label: 'Add',
-                          badgeColor: state.activeAddCategory == PipeCategory.small
-                              ? const Color(0xFF22C55E)
-                              : (state.activeAddCategory == PipeCategory.medium ? const Color(0xFFEAB308) : const Color(0xFFEF4444)),
-                          onPressed: () => notifier.setSelectedTool(CanvasTool.add),
-                        ),
-                        _buildToolButton(
-                          tool: CanvasTool.delete,
-                          currentTool: state.selectedTool,
-                          icon: Icons.delete_outline,
-                          label: 'Delete',
-                          onPressed: () => notifier.setSelectedTool(CanvasTool.delete),
-                        ),
-                        _buildToolButton(
-                          tool: CanvasTool.select,
-                          currentTool: state.selectedTool,
-                          icon: Icons.touch_app_outlined,
-                          label: 'Toggle',
-                          onPressed: () => notifier.setSelectedTool(CanvasTool.select),
-                        ),
-                        Container(width: 1, height: 20, color: Colors.white24, margin: const EdgeInsets.symmetric(horizontal: 4)),
-                        InkWell(
-                          onTap: () => notifier.toggleShowNumbers(),
-                          borderRadius: BorderRadius.circular(16),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                            decoration: BoxDecoration(
-                              color: state.showNumbers ? Colors.cyanAccent.withValues(alpha: 0.25) : Colors.transparent,
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.pin_outlined,
-                                  size: 14,
-                                  color: state.showNumbers ? Colors.cyanAccent : Colors.white60,
-                                ),
-                                const SizedBox(width: 3),
-                                Text(
-                                  state.showNumbers ? '# ON' : '# OFF',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: state.showNumbers ? FontWeight.bold : FontWeight.normal,
-                                    color: state.showNumbers ? Colors.cyanAccent : Colors.white60,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        if (state.canUndo) ...[
-                          Container(width: 1, height: 20, color: Colors.white24, margin: const EdgeInsets.symmetric(horizontal: 4)),
-                          IconButton(
-                            icon: const Icon(Icons.undo, color: Colors.white, size: 18),
-                            tooltip: 'Undo Last Action',
-                            onPressed: () => notifier.undo(),
-                            constraints: const BoxConstraints(minWidth: 34, minHeight: 32),
-                            padding: EdgeInsets.zero,
-                          ),
-                        ],
-                      ],
-                    ),
+                  _buildToolButton(
+                    tool: CanvasTool.crop,
+                    currentTool: state.selectedTool,
+                    icon: Icons.crop,
+                    label: 'Crop ROI',
+                    onPressed: () => notifier.setSelectedTool(CanvasTool.crop),
                   ),
-                ),
-              ),
-            ),
-
-            // Secondary Floating Bar when in "Add Pipe" Mode: Color & Radius Adjuster
-            if (state.selectedTool == CanvasTool.add)
-              Positioned(
-                top: 64,
-                left: 8,
-                right: 8,
-                child: Center(
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    physics: const BouncingScrollPhysics(),
+                  _buildToolButton(
+                    tool: CanvasTool.add,
+                    currentTool: state.selectedTool,
+                    icon: Icons.add_circle_outline,
+                    label: 'Add',
+                    badgeColor: state.activeAddCategory == PipeCategory.small
+                        ? const Color(0xFF22C55E)
+                        : (state.activeAddCategory == PipeCategory.medium ? const Color(0xFFEAB308) : const Color(0xFFEF4444)),
+                    onPressed: () => notifier.setSelectedTool(CanvasTool.add),
+                  ),
+                  _buildToolButton(
+                    tool: CanvasTool.delete,
+                    currentTool: state.selectedTool,
+                    icon: Icons.delete_outline,
+                    label: 'Delete',
+                    onPressed: () => notifier.setSelectedTool(CanvasTool.delete),
+                  ),
+                  _buildToolButton(
+                    tool: CanvasTool.select,
+                    currentTool: state.selectedTool,
+                    icon: Icons.touch_app_outlined,
+                    label: 'Toggle',
+                    onPressed: () => notifier.setSelectedTool(CanvasTool.select),
+                  ),
+                  Container(width: 1, height: 20, color: Colors.white24, margin: const EdgeInsets.symmetric(horizontal: 4)),
+                  InkWell(
+                    onTap: () => notifier.toggleShowNumbers(),
+                    borderRadius: BorderRadius.circular(16),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
                       decoration: BoxDecoration(
-                        color: const Color(0xEE1E222A),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: Colors.white24),
+                        color: state.showNumbers ? Colors.cyanAccent.withValues(alpha: 0.25) : Colors.transparent,
+                        borderRadius: BorderRadius.circular(16),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          _buildAddColorChip(notifier, state.activeAddCategory, PipeCategory.small, '🟢 Small', const Color(0xFF22C55E)),
-                          const SizedBox(width: 6),
-                          _buildAddColorChip(notifier, state.activeAddCategory, PipeCategory.medium, '🟡 Med', const Color(0xFFEAB308)),
-                          const SizedBox(width: 6),
-                          _buildAddColorChip(notifier, state.activeAddCategory, PipeCategory.large, '🔴 Large', const Color(0xFFEF4444)),
-                          const SizedBox(width: 10),
-                          Container(width: 1, height: 18, color: Colors.white24),
-                          const SizedBox(width: 8),
-                          GestureDetector(
-                            onTap: () {
-                              notifier.setManualAddRadius(state.manualAddRadius - 5);
-                            },
-                            child: const Icon(Icons.remove_circle_outline, color: Colors.white70, size: 18),
+                          Icon(
+                            Icons.pin_outlined,
+                            size: 14,
+                            color: state.showNumbers ? Colors.cyanAccent : Colors.white60,
                           ),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 6),
-                            child: Text(
-                              '${state.manualAddRadius.toInt()}px',
-                              style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                          const SizedBox(width: 3),
+                          Text(
+                            state.showNumbers ? '# ON' : '# OFF',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: state.showNumbers ? FontWeight.bold : FontWeight.normal,
+                              color: state.showNumbers ? Colors.cyanAccent : Colors.white60,
                             ),
-                          ),
-                          GestureDetector(
-                            onTap: () {
-                              notifier.setManualAddRadius(state.manualAddRadius + 5);
-                            },
-                            child: const Icon(Icons.add_circle_outline, color: Colors.white70, size: 18),
                           ),
                         ],
                       ),
                     ),
                   ),
-                ),
-              ),
-
-            // Crop Action Floating Bar when Crop Tool is active
-            if (isCropMode)
-              Positioned(
-                top: 64,
-                left: 8,
-                right: 8,
-                child: Center(
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    physics: const BouncingScrollPhysics(),
-                    child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFA1E222A),
-                    borderRadius: BorderRadius.circular(24),
-                    border: Border.all(color: const Color(0xFF38BDF8), width: 1.5),
-                    boxShadow: const [
-                      BoxShadow(color: Colors.black87, blurRadius: 18, offset: Offset(0, 6)),
-                    ],
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      FilledButton.icon(
-                        style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFF22C55E),
-                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                        ),
-                        onPressed: () {
-                          final imgRect = Rect.fromLTWH(
-                            _cropBoxNorm.left * widget.imageWidth,
-                            _cropBoxNorm.top * widget.imageHeight,
-                            _cropBoxNorm.width * widget.imageWidth,
-                            _cropBoxNorm.height * widget.imageHeight,
-                          );
-                          notifier.applyCrop(imgRect);
-                        },
-                        icon: const Icon(Icons.check, size: 18),
-                        label: const Text('Apply Crop', style: TextStyle(fontWeight: FontWeight.bold)),
-                      ),
-                      if (state.isCropped) ...[
-                        const SizedBox(width: 8),
-                        OutlinedButton.icon(
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.white,
-                            side: const BorderSide(color: Colors.white38),
-                          ),
-                          onPressed: () => notifier.resetCrop(),
-                          icon: const Icon(Icons.restore, size: 16),
-                          label: const Text('Reset Full'),
-                        ),
-                      ],
-                      const SizedBox(width: 8),
-                      TextButton.icon(
-                        style: TextButton.styleFrom(foregroundColor: Colors.white70),
-                        onPressed: () => notifier.setSelectedTool(CanvasTool.pan),
-                        icon: const Icon(Icons.close, size: 16),
-                        label: const Text('Cancel'),
-                      ),
-                    ],
-                  ),
-                ),
+                  if (state.canUndo) ...[
+                    Container(width: 1, height: 20, color: Colors.white24, margin: const EdgeInsets.symmetric(horizontal: 4)),
+                    IconButton(
+                      icon: const Icon(Icons.undo, color: Colors.white, size: 18),
+                      tooltip: 'Undo Last Action',
+                      onPressed: () => notifier.undo(),
+                      constraints: const BoxConstraints(minWidth: 34, minHeight: 32),
+                      padding: EdgeInsets.zero,
+                    ),
+                  ],
+                ],
               ),
             ),
           ),
+        ),
 
-            // Mode hint indicator banner
-            if (!isCropMode && state.selectedTool != CanvasTool.pan && !state.isProcessing)
-              Positioned(
-                bottom: 20,
-                left: 16,
-                right: 16,
-                child: Center(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.85),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: Colors.white24),
-                    ),
-                    child: Text(
-                      state.selectedTool == CanvasTool.add
-                          ? '👉 Tap anywhere on image to add a pipe circle'
-                          : (state.selectedTool == CanvasTool.delete
-                              ? '👉 Tap any pipe circle to delete it'
-                              : '👉 Tap any pipe to toggle Active/Excluded'),
-                      style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
-                    ),
-                  ),
-                ),
-              ),
-
-            // Bottom-Right Zoom & Fit controls
-            Positioned(
-              right: 12,
-              bottom: 12,
-              child: Container(
-                decoration: BoxDecoration(
-                  color: const Color(0xDD1E222A),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.white24),
-                ),
+        // 2. Secondary Strip when in "Add Pipe" Mode: Color & Radius Adjuster
+        if (state.selectedTool == CanvasTool.add)
+          Container(
+            width: double.infinity,
+            color: const Color(0xFF1E232E),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: Center(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                physics: const BouncingScrollPhysics(),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    IconButton(
-                      icon: const Icon(Icons.zoom_out, color: Colors.white, size: 18),
-                      tooltip: 'Zoom Out',
-                      constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-                      padding: EdgeInsets.zero,
-                      onPressed: () {
-                        _transformController.value = _transformController.value.scaledByDouble(0.8, 0.8, 1.0, 1.0);
-                      },
+                    _buildAddColorChip(notifier, state.activeAddCategory, PipeCategory.small, '🟢 Small', const Color(0xFF22C55E)),
+                    const SizedBox(width: 6),
+                    _buildAddColorChip(notifier, state.activeAddCategory, PipeCategory.medium, '🟡 Med', const Color(0xFFEAB308)),
+                    const SizedBox(width: 6),
+                    _buildAddColorChip(notifier, state.activeAddCategory, PipeCategory.large, '🔴 Large', const Color(0xFFEF4444)),
+                    const SizedBox(width: 10),
+                    Container(width: 1, height: 18, color: Colors.white24),
+                    const SizedBox(width: 8),
+                    GestureDetector(
+                      onTap: () => notifier.setManualAddRadius(state.manualAddRadius - 5),
+                      child: const Icon(Icons.remove_circle_outline, color: Colors.white70, size: 18),
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.fit_screen_outlined, color: Colors.white, size: 18),
-                      tooltip: 'Fit View',
-                      constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-                      padding: EdgeInsets.zero,
-                      onPressed: _resetZoom,
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      child: Text(
+                        '${state.manualAddRadius.toInt()}px',
+                        style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                      ),
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.zoom_in, color: Colors.white, size: 18),
-                      tooltip: 'Zoom In',
-                      constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-                      padding: EdgeInsets.zero,
-                      onPressed: () {
-                        _transformController.value = _transformController.value.scaledByDouble(1.25, 1.25, 1.0, 1.0);
-                      },
+                    GestureDetector(
+                      onTap: () => notifier.setManualAddRadius(state.manualAddRadius + 5),
+                      child: const Icon(Icons.add_circle_outline, color: Colors.white70, size: 18),
                     ),
                   ],
                 ),
               ),
             ),
-          ],
-        );
-      },
+          ),
+
+        // 3. Dedicated Action Strip when in Crop ROI Mode
+        if (isCropMode)
+          Container(
+            width: double.infinity,
+            color: const Color(0xFF1B2332),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            child: Center(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                physics: const BouncingScrollPhysics(),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFF22C55E),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                      ),
+                      onPressed: () {
+                        final normW = _cropBoxNorm.width.abs();
+                        final normH = _cropBoxNorm.height.abs();
+                        if (normW < 0.05 || normH < 0.05) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Selected crop area is too small. Please drag handles to expand.')),
+                          );
+                          return;
+                        }
+                        final imgRect = Rect.fromLTWH(
+                          _cropBoxNorm.left * widget.imageWidth,
+                          _cropBoxNorm.top * widget.imageHeight,
+                          normW * widget.imageWidth,
+                          normH * widget.imageHeight,
+                        );
+                        notifier.applyCrop(imgRect);
+                      },
+                      icon: const Icon(Icons.check, size: 18),
+                      label: const Text('Apply Crop', style: TextStyle(fontWeight: FontWeight.bold)),
+                    ),
+                    if (state.isCropped) ...[
+                      const SizedBox(width: 8),
+                      OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.white,
+                          side: const BorderSide(color: Colors.white38),
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                        ),
+                        onPressed: () => notifier.resetCrop(),
+                        icon: const Icon(Icons.restore, size: 16),
+                        label: const Text('Reset Full'),
+                      ),
+                    ],
+                    const SizedBox(width: 8),
+                    TextButton.icon(
+                      style: TextButton.styleFrom(
+                        foregroundColor: Colors.white70,
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                      ),
+                      onPressed: () => notifier.setSelectedTool(CanvasTool.pan),
+                      icon: const Icon(Icons.close, size: 16),
+                      label: const Text('Cancel'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+
+        // 4. Expanded Canvas Viewport: Completely clean & unobstructed!
+        Expanded(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final canvasW = constraints.maxWidth;
+              final canvasH = constraints.maxHeight;
+
+              final scaleX = canvasW / widget.imageWidth;
+              final scaleY = canvasH / widget.imageHeight;
+              final scale = math.min(scaleX, scaleY);
+
+              final renderedW = widget.imageWidth * scale;
+              final renderedH = widget.imageHeight * scale;
+
+              return Stack(
+                alignment: Alignment.center,
+                children: [
+                  // Dark viewport background
+                  Container(color: const Color(0xFF111318)),
+
+                  // Interactive viewer for pinch zoom and pan
+                  InteractiveViewer(
+                    transformationController: _transformController,
+                    minScale: 0.5,
+                    maxScale: 10.0,
+                    panEnabled: isPanMode,
+                    scaleEnabled: !isCropMode,
+                    boundaryMargin: const EdgeInsets.all(300),
+                    child: Center(
+                      child: SizedBox(
+                        width: renderedW,
+                        height: renderedH,
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            // Base image
+                            Image.memory(
+                              widget.imageBytes,
+                              fit: BoxFit.fill,
+                              gaplessPlayback: true,
+                              filterQuality: FilterQuality.medium,
+                            ),
+
+                            // Ellipse & dot overlay
+                            CustomPaint(
+                              painter: PipeOverlayPainter(
+                                imageWidth: widget.imageWidth,
+                                imageHeight: widget.imageHeight,
+                                detections: widget.detections,
+                                scale: scale,
+                                showLabels: state.showNumbers,
+                              ),
+                            ),
+
+                            // Crop Viewport Overlay when Crop Tool is active
+                            if (isCropMode)
+                              CustomPaint(
+                                painter: CropOverlayPainter(
+                                  cropNorm: _cropBoxNorm,
+                                  renderedSize: Size(renderedW, renderedH),
+                                ),
+                              ),
+
+                            // Gesture overlay for manual interactions
+                            Positioned.fill(
+                              child: GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onPanStart: isCropMode
+                                    ? (details) => _onCropPanStart(details.localPosition, renderedW, renderedH)
+                                    : null,
+                                onPanUpdate: isCropMode
+                                    ? (details) => _onCropPanUpdate(details.localPosition, renderedW, renderedH)
+                                    : null,
+                                onPanEnd: isCropMode ? (_) => _activeCropHandle = null : null,
+                                onTapUp: (details) {
+                                  if (!state.isProcessing && !isCropMode) {
+                                    _handleImageTap(details.localPosition, scale);
+                                  }
+                                },
+                                onLongPressStart: (details) {
+                                  if (!state.isProcessing && !isCropMode) {
+                                    _handlePipeLongPress(details.localPosition, scale);
+                                  }
+                                },
+                              ),
+                            ),
+
+                            // Real-time laser scanning line
+                            if (_showProgressCard)
+                              AnimatedBuilder(
+                                animation: _progressAnimController,
+                                builder: (context, child) {
+                                  return Positioned(
+                                    top: _progressAnimController.value * renderedH,
+                                    left: 0,
+                                    right: 0,
+                                    child: Container(
+                                      height: 3,
+                                      decoration: BoxDecoration(
+                                        gradient: LinearGradient(
+                                          colors: [
+                                            Colors.cyanAccent.withValues(alpha: 0.0),
+                                            Colors.cyanAccent,
+                                            Colors.cyanAccent.withValues(alpha: 0.0),
+                                          ],
+                                        ),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: Colors.cyanAccent.withValues(alpha: 0.8),
+                                            blurRadius: 10,
+                                            spreadRadius: 2,
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  // Progress card in center
+                  if (_showProgressCard)
+                    AnimatedBuilder(
+                      animation: _progressAnimController,
+                      builder: (context, child) {
+                        final pct = (_progressAnimController.value * 100).clamp(0, 100).toInt();
+                        final isDone = pct >= 100;
+                        return Center(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                            margin: const EdgeInsets.symmetric(horizontal: 28),
+                            decoration: BoxDecoration(
+                              color: const Color(0xEE1E222A),
+                              borderRadius: BorderRadius.circular(18),
+                              border: Border.all(
+                                color: (isDone ? Colors.greenAccent : Colors.cyanAccent).withValues(alpha: 0.7),
+                                width: 1.5,
+                              ),
+                              boxShadow: const [
+                                BoxShadow(color: Colors.black87, blurRadius: 20, offset: Offset(0, 6)),
+                              ],
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    SizedBox(
+                                      width: 22,
+                                      height: 22,
+                                      child: isDone
+                                          ? const Icon(Icons.check_circle, color: Colors.greenAccent, size: 22)
+                                          : const CircularProgressIndicator(
+                                              strokeWidth: 2.5,
+                                              valueColor: AlwaysStoppedAnimation(Colors.cyanAccent),
+                                            ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Text(
+                                      isDone ? 'AI Counting Pipes: Complete (100%)' : 'AI Counting Pipes ($pct%)',
+                                      style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 12),
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(6),
+                                  child: LinearProgressIndicator(
+                                    value: _progressAnimController.value,
+                                    minHeight: 6,
+                                    backgroundColor: Colors.white12,
+                                    valueColor: AlwaysStoppedAnimation(
+                                      isDone ? Colors.greenAccent : Colors.cyanAccent,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  _getDynamicStageText(pct),
+                                  style: const TextStyle(color: Colors.white70, fontSize: 11),
+                                  textAlign: TextAlign.center,
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+
+                  // Mode hint indicator banner
+                  if (!isCropMode && state.selectedTool != CanvasTool.pan && !state.isProcessing)
+                    Positioned(
+                      bottom: 16,
+                      left: 16,
+                      right: 16,
+                      child: Center(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.85),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: Colors.white24),
+                          ),
+                          child: Text(
+                            state.selectedTool == CanvasTool.add
+                                ? '👉 Tap anywhere on image to add a pipe circle'
+                                : (state.selectedTool == CanvasTool.delete
+                                    ? '👉 Tap any pipe circle to delete it'
+                                    : '👉 Tap any pipe to toggle Active/Excluded'),
+                            style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ),
+                    ),
+
+                  // Bottom-Right Zoom & Fit controls
+                  Positioned(
+                    right: 12,
+                    bottom: 12,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: const Color(0xDD1E222A),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.white24),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.zoom_out, color: Colors.white, size: 18),
+                            tooltip: 'Zoom Out',
+                            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                            padding: EdgeInsets.zero,
+                            onPressed: () {
+                              _transformController.value = _transformController.value.scaledByDouble(0.8, 0.8, 1.0, 1.0);
+                            },
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.fit_screen_outlined, color: Colors.white, size: 18),
+                            tooltip: 'Fit View',
+                            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                            padding: EdgeInsets.zero,
+                            onPressed: _resetZoom,
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.zoom_in, color: Colors.white, size: 18),
+                            tooltip: 'Zoom In',
+                            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                            padding: EdgeInsets.zero,
+                            onPressed: () {
+                              _transformController.value = _transformController.value.scaledByDouble(1.25, 1.25, 1.0, 1.0);
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 
@@ -1003,7 +980,7 @@ class CropOverlayPainter extends CustomPainter {
 
     // 4 Corner handles
     final handlePaint = Paint()..color = const Color(0xFF38BDF8);
-    final handleRadius = 6.0;
+    const handleRadius = 6.0;
     canvas.drawCircle(rect.topLeft, handleRadius, handlePaint);
     canvas.drawCircle(rect.topRight, handleRadius, handlePaint);
     canvas.drawCircle(rect.bottomLeft, handleRadius, handlePaint);

@@ -226,23 +226,36 @@ class DetectionNotifier extends StateNotifier<DetectionState> {
       state = state.copyWith(
         isProcessing: true,
         statusMessage: 'Cropping image to selection...',
+        clearError: true,
       );
 
+      final currentBytes = state.imageBytes!;
+      final currentW = state.imageWidth;
+      final currentH = state.imageHeight;
+
       final cropped = await Isolate.run(() {
-        final decoded = img.decodeImage(state.imageBytes!);
+        final decoded = img.decodeImage(currentBytes);
         if (decoded == null) return null;
 
-        final x = cropRect.left.round().clamp(0, decoded.width - 1);
-        final y = cropRect.top.round().clamp(0, decoded.height - 1);
-        final w = cropRect.width.round().clamp(10, decoded.width - x);
-        final h = cropRect.height.round().clamp(10, decoded.height - y);
+        final imgW = decoded.width;
+        final imgH = decoded.height;
+
+        final normL = (cropRect.left / (currentW > 0 ? currentW : imgW)).clamp(0.0, 0.95);
+        final normT = (cropRect.top / (currentH > 0 ? currentH : imgH)).clamp(0.0, 0.95);
+        final normR = (cropRect.right / (currentW > 0 ? currentW : imgW)).clamp(normL + 0.05, 1.0);
+        final normB = (cropRect.bottom / (currentH > 0 ? currentH : imgH)).clamp(normT + 0.05, 1.0);
+
+        final x = (normL * imgW).round().clamp(0, imgW - 10);
+        final y = (normT * imgH).round().clamp(0, imgH - 10);
+        final w = ((normR - normL) * imgW).round().clamp(10, imgW - x);
+        final h = ((normB - normT) * imgH).round().clamp(10, imgH - y);
 
         final croppedImg = img.copyCrop(decoded, x: x, y: y, width: w, height: h);
         return img.encodeJpg(croppedImg, quality: 95);
       });
 
       if (cropped == null) {
-        state = state.copyWith(isProcessing: false, errorMessage: 'Failed to crop image format.');
+        state = state.copyWith(isProcessing: false, errorMessage: 'Failed to process crop on image.');
         return;
       }
 
@@ -260,6 +273,7 @@ class DetectionNotifier extends StateNotifier<DetectionState> {
         selectedTool: CanvasTool.pan,
         isProcessing: false,
         clearResult: true,
+        clearError: true,
         undoStack: const [],
       );
 
@@ -433,7 +447,12 @@ class DetectionNotifier extends StateNotifier<DetectionState> {
       );
 
       final picker = ImagePicker();
-      final picked = await picker.pickImage(source: ImageSource.camera);
+      final picked = await picker.pickImage(
+        source: ImageSource.camera,
+        maxWidth: 2400,
+        maxHeight: 2400,
+        imageQuality: 92,
+      );
 
       if (picked != null) {
         final bytes = await picked.readAsBytes();

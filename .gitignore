@@ -20,6 +20,7 @@ android_version/.flutter-plugins-dependencies
 *.so
 *.dylib
 *.bin
+*.apk
 
 # Python Runtime & Cache
 __pycache__/
