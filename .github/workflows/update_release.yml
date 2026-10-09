@@ -1,4 +1,4 @@
-name: Publish Release Notes
+name: Publish & Sync GitHub Releases
 
 on:
   workflow_dispatch:
@@ -15,15 +15,27 @@ permissions:
   contents: write
 
 jobs:
-  publish-release:
-    name: Publish Release Notes to GitHub Release
+  sync-releases:
+    name: Sync Release Assets and Notes
     runs-on: ubuntu-latest
 
     steps:
       - name: "Step 1 - Checkout repository"
         uses: actions/checkout@v4
 
-      - name: "Step 2 - Update GitHub Release v2.0.0"
+      - name: "Step 2 - Fetch latest Windows Setup Installer and Android APK"
+        run: |
+          echo "=== Fetching Windows Desktop Installer (292 MB) ==="
+          curl -sL -o PipeCounterPro_v2.0.0_Setup.exe "https://github.com/Haroon-World/Pipe_Counter_Pro/releases/download/main/PipeCounterPro_v2.0.0_Setup.exe"
+          
+          echo "=== Fetching Android APK Artifact from latest build run ==="
+          curl -sL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" -o artifact.zip "https://api.github.com/repos/Haroon-World/Pipe_Counter_Pro/actions/artifacts/11594465035/zip"
+          unzip -o artifact.zip
+          
+          echo "=== Verifying downloaded files ==="
+          ls -lh PipeCounterPro_v2.0.0_Setup.exe PipeCounterPro_Android_v2.0.0.apk
+
+      - name: "Step 3 - Publish to Release v2.0.0 (Latest Release)"
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v2.0.0
@@ -31,5 +43,22 @@ jobs:
           body_path: RELEASE_NOTES.md
           draft: false
           prerelease: false
+          files: |
+            PipeCounterPro_v2.0.0_Setup.exe
+            PipeCounterPro_Android_v2.0.0.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Step 4 - Publish to Release main (Branch Release)"
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: main
+          name: "Pipe Counter Pro v2.0.0 — Intelligent Multi-Scale Vision Suite"
+          body_path: RELEASE_NOTES.md
+          draft: false
+          prerelease: false
+          files: |
+            PipeCounterPro_v2.0.0_Setup.exe
+            PipeCounterPro_Android_v2.0.0.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
