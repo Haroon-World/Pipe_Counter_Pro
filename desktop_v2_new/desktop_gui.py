@@ -23,10 +23,11 @@ import os
 import sys
 
 # Ensure Windows Taskbar groups under our app identity and renders high-res icon
+APP_USER_MODEL_ID = "HaroonWorld.PipeCounterPro.v2.1"
 if sys.platform == "win32":
     try:
         import ctypes
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("haroonworld.pipecounterpro.ai.v2")
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
     except Exception:
         pass
 
@@ -661,12 +662,11 @@ class InteractiveGraphicsView(QGraphicsView):
         self._zoom_level = 1.0
 
 
-def get_app_icon_path() -> str:
+def _get_asset_search_dirs() -> List[str]:
     meipass = getattr(sys, "_MEIPASS", "")
     script_dir = os.path.dirname(os.path.abspath(__file__))
     exe_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else ""
-    
-    search_dirs = [
+    return [
         os.path.join(meipass, "assets") if meipass else "",
         meipass,
         os.path.join(exe_dir, "_internal", "assets") if exe_dir else "",
@@ -675,23 +675,112 @@ def get_app_icon_path() -> str:
         os.path.join(script_dir, "assets"),
         script_dir,
     ]
-    for d in search_dirs:
+
+
+def get_app_icon_path() -> str:
+    for d in _get_asset_search_dirs():
         if not d or not os.path.isdir(d):
             continue
-        for name in ["app_icon.ico", "app_icon.png", "logo.png"]:
+        for name in ["pipecounter_v2_icon.ico", "app_icon.ico", "app_icon.png", "logo.png"]:
             p = os.path.join(d, name)
             if os.path.exists(p):
                 return p
     return ""
 
 
+def create_app_qicon() -> QIcon:
+    icon = QIcon()
+    for d in _get_asset_search_dirs():
+        if not d or not os.path.isdir(d):
+            continue
+        for name in ["pipecounter_v2_icon.ico", "app_icon.ico", "app_icon.png", "logo.png"]:
+            p = os.path.join(d, name)
+            if os.path.exists(p):
+                icon.addFile(p)
+        if not icon.isNull():
+            break
+    return icon
+
+
+def apply_win32_window_icon(hwnd: int):
+    if sys.platform != "win32" or not hwnd:
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        ico_path = ""
+        for d in _get_asset_search_dirs():
+            if not d or not os.path.isdir(d):
+                continue
+            for name in ["pipecounter_v2_icon.ico", "app_icon.ico"]:
+                p = os.path.join(d, name)
+                if os.path.exists(p):
+                    ico_path = os.path.abspath(p)
+                    break
+            if ico_path:
+                break
+        if not ico_path:
+            return
+
+        user32 = ctypes.windll.user32
+        user32.LoadImageW.argtypes = [
+            wintypes.HINSTANCE,
+            wintypes.LPCWSTR,
+            wintypes.UINT,
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.UINT,
+        ]
+        user32.LoadImageW.restype = wintypes.HANDLE
+
+        user32.SendMessageW.argtypes = [
+            wintypes.HWND,
+            wintypes.UINT,
+            wintypes.WPARAM,
+            wintypes.LPARAM,
+        ]
+        user32.SendMessageW.restype = wintypes.LPARAM
+
+        WM_SETICON = 0x0080
+        ICON_SMALL = 0
+        ICON_BIG = 1
+        IMAGE_ICON = 1
+        LR_LOADFROMFILE = 0x0010
+        LR_DEFAULTSIZE = 0x0040
+
+        hicon_big = user32.LoadImageW(None, ico_path, IMAGE_ICON, 256, 256, LR_LOADFROMFILE)
+        if not hicon_big:
+            hicon_big = user32.LoadImageW(None, ico_path, IMAGE_ICON, 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE)
+        hicon_small = user32.LoadImageW(None, ico_path, IMAGE_ICON, 32, 32, LR_LOADFROMFILE)
+        if not hicon_small:
+            hicon_small = hicon_big
+
+        if hicon_big:
+            user32.SendMessageW(int(hwnd), WM_SETICON, ICON_BIG, int(hicon_big))
+            try:
+                user32.SetClassLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.HANDLE]
+                user32.SetClassLongPtrW.restype = wintypes.HANDLE
+                user32.SetClassLongPtrW(int(hwnd), -14, hicon_big)
+            except Exception:
+                pass
+        if hicon_small:
+            user32.SendMessageW(int(hwnd), WM_SETICON, ICON_SMALL, int(hicon_small))
+            try:
+                user32.SetClassLongPtrW(int(hwnd), -34, hicon_small)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Pipe Counter Pro — AI Pipe Detection & Intelligent Size Differentiation")
-        icon_path = get_app_icon_path()
-        if icon_path:
-            self.setWindowIcon(QIcon(icon_path))
+        app_icon = create_app_qicon()
+        if not app_icon.isNull():
+            self.setWindowIcon(app_icon)
 
         # Responsive default window sizing matching monitor dimensions
         screen = QApplication.primaryScreen()
@@ -725,6 +814,7 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
         self.init_ui()
         self.apply_dark_theme()
+        apply_win32_window_icon(int(self.winId()))
 
         QApplication.instance().installEventFilter(self)
 
@@ -734,6 +824,10 @@ class MainWindow(QMainWindow):
             default_path = os.path.join(os.getcwd(), "assets", "real_pipes_test.jpg")
         if os.path.exists(default_path):
             self.load_image(default_path)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        apply_win32_window_icon(int(self.winId()))
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -817,22 +911,26 @@ class MainWindow(QMainWindow):
 
         # ----------------- LEFT PANEL: Inside QScrollArea -----------------
         control_panel = QWidget()
+        control_panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.MinimumExpanding)
         control_layout = QVBoxLayout(control_panel)
-        control_layout.setContentsMargins(8, 8, 12, 12)
-        control_layout.setSpacing(12)
+        control_layout.setContentsMargins(8, 8, 12, 16)
+        control_layout.setSpacing(14)
 
         header_box = QVBoxLayout()
-        header_box.setSpacing(2)
+        header_box.setSpacing(3)
         title_lbl = QLabel("PIPE COUNTER PRO")
-        title_lbl.setStyleSheet("font-size: 20px; font-weight: 900; color: #38bdf8; letter-spacing: 1.5px;")
+        title_lbl.setMinimumHeight(26)
+        title_lbl.setStyleSheet("font-size: 20px; font-weight: 900; color: #38bdf8; letter-spacing: 1.5px; background: transparent;")
         subtitle_lbl = QLabel("AI Pipe Counter with Intelligent Size Differentiation")
-        subtitle_lbl.setStyleSheet("font-size: 11px; color: #94a3b8;")
+        subtitle_lbl.setMinimumHeight(18)
+        subtitle_lbl.setWordWrap(True)
+        subtitle_lbl.setStyleSheet("font-size: 11px; color: #94a3b8; background: transparent;")
         header_box.addWidget(title_lbl)
         header_box.addWidget(subtitle_lbl)
         control_layout.addLayout(header_box)
 
         self.btn_upload = QPushButton("📁 Upload Pipe Image")
-        self.btn_upload.setFixedHeight(40)
+        self.btn_upload.setMinimumHeight(40)
         self.btn_upload.setStyleSheet(
             "background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #334155, stop:1 #1e293b); "
             "color: #f8fafc; font-weight: 700; border: 1px solid #475569; border-radius: 6px;"
@@ -844,39 +942,47 @@ class MainWindow(QMainWindow):
         # ----------------- LIVE COUNT SUMMARY -----------------
         kpi_group = QGroupBox("LIVE PIPE COUNT SUMMARY")
         kpi_layout = QVBoxLayout(kpi_group)
-        kpi_layout.setContentsMargins(10, 14, 10, 10)
-        kpi_layout.setSpacing(8)
+        kpi_layout.setContentsMargins(10, 18, 10, 12)
+        kpi_layout.setSpacing(10)
 
         total_hero_box = QFrame()
-        total_hero_box.setFixedHeight(84)
+        total_hero_box.setObjectName("totalHeroBox")
+        total_hero_box.setMinimumHeight(88)
         total_hero_box.setStyleSheet(
+            "#totalHeroBox { "
             "background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0f172a, stop:1 #1e293b); "
-            "border: 1px solid #0284c7; border-radius: 8px; padding: 6px;"
+            "border: 1px solid #0284c7; border-radius: 8px; "
+            "} "
+            "#totalHeroBox QLabel { border: none; background: transparent; }"
         )
         total_hero_layout = QVBoxLayout(total_hero_box)
-        total_hero_layout.setContentsMargins(0, 0, 0, 0)
+        total_hero_layout.setContentsMargins(10, 8, 10, 8)
         total_hero_layout.setSpacing(2)
 
         self.lbl_total_val = QLabel("0")
         self.lbl_total_val.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_total_val.setFixedHeight(44)
-        self.lbl_total_val.setStyleSheet("font-size: 42px; font-weight: 900; color: #38bdf8; letter-spacing: -1px;")
+        self.lbl_total_val.setMinimumHeight(46)
+        self.lbl_total_val.setStyleSheet("font-size: 38px; font-weight: 900; color: #38bdf8; border: none; background: transparent;")
         self.lbl_total_title = QLabel("TOTAL PIPES (COUNTED)")
         self.lbl_total_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_total_title.setStyleSheet("font-size: 11px; font-weight: 700; color: #94a3b8; letter-spacing: 1px;")
+        self.lbl_total_title.setMinimumHeight(18)
+        self.lbl_total_title.setStyleSheet("font-size: 11px; font-weight: 700; color: #94a3b8; letter-spacing: 1px; border: none; background: transparent;")
 
         total_hero_layout.addWidget(self.lbl_total_val)
         total_hero_layout.addWidget(self.lbl_total_title)
         kpi_layout.addWidget(total_hero_box)
 
         self.size_cards_container = QWidget()
+        self.size_cards_container.setStyleSheet("background: transparent;")
+        self.size_cards_container.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.MinimumExpanding)
         self.size_cards_layout = QVBoxLayout(self.size_cards_container)
         self.size_cards_layout.setContentsMargins(0, 2, 0, 2)
         self.size_cards_layout.setSpacing(6)
         kpi_layout.addWidget(self.size_cards_container)
 
         self.lbl_perf = QLabel("Engine Ready")
-        self.lbl_perf.setStyleSheet("font-size: 10px; color: #64748b; font-style: italic; margin-top: 2px;")
+        self.lbl_perf.setMinimumHeight(18)
+        self.lbl_perf.setStyleSheet("font-size: 10px; color: #64748b; font-style: italic; background: transparent;")
         self.lbl_perf.setAlignment(Qt.AlignmentFlag.AlignCenter)
         kpi_layout.addWidget(self.lbl_perf)
 
@@ -885,11 +991,13 @@ class MainWindow(QMainWindow):
         # ----------------- DRAW COLOR CHOICE -----------------
         draw_color_group = QGroupBox("NEW CIRCLE COLOR / SIZE")
         draw_color_layout = QVBoxLayout(draw_color_group)
-        draw_color_layout.setContentsMargins(10, 14, 10, 10)
-        draw_color_layout.setSpacing(6)
+        draw_color_layout.setContentsMargins(10, 18, 10, 12)
+        draw_color_layout.setSpacing(8)
 
         lbl_color_hint = QLabel("Select color for manual pipe circles:")
-        lbl_color_hint.setStyleSheet("font-size: 11px; color: #cbd5e1;")
+        lbl_color_hint.setMinimumHeight(20)
+        lbl_color_hint.setWordWrap(True)
+        lbl_color_hint.setStyleSheet("font-size: 11px; color: #cbd5e1; background: transparent;")
         draw_color_layout.addWidget(lbl_color_hint)
 
         color_btn_row = QHBoxLayout()
@@ -897,19 +1005,19 @@ class MainWindow(QMainWindow):
         self.btn_col_green = QPushButton("🟢 Green")
         self.btn_col_green.setCheckable(True)
         self.btn_col_green.setChecked(True)
-        self.btn_col_green.setFixedHeight(30)
+        self.btn_col_green.setMinimumHeight(32)
         self.btn_col_green.setStyleSheet("background-color: #14532d; color: #86efac; border: 2px solid #22c55e;")
         self.btn_col_green.clicked.connect(lambda: self.set_draw_color("Green"))
 
         self.btn_col_yellow = QPushButton("🟡 Yellow")
         self.btn_col_yellow.setCheckable(True)
-        self.btn_col_yellow.setFixedHeight(30)
+        self.btn_col_yellow.setMinimumHeight(32)
         self.btn_col_yellow.setStyleSheet("background-color: #713f12; color: #fde047; border: 1px solid #ca8a04;")
         self.btn_col_yellow.clicked.connect(lambda: self.set_draw_color("Yellow"))
 
         self.btn_col_red = QPushButton("🔴 Red")
         self.btn_col_red.setCheckable(True)
-        self.btn_col_red.setFixedHeight(30)
+        self.btn_col_red.setMinimumHeight(32)
         self.btn_col_red.setStyleSheet("background-color: #7f1d1d; color: #fca5a5; border: 1px solid #dc2626;")
         self.btn_col_red.clicked.connect(lambda: self.set_draw_color("Red"))
 
@@ -928,14 +1036,16 @@ class MainWindow(QMainWindow):
         # ----------------- CIRCLE CLICK ACTION -----------------
         action_group = QGroupBox("CLICKING ON EXISTING CIRCLES")
         action_layout = QVBoxLayout(action_group)
-        action_layout.setContentsMargins(10, 14, 10, 10)
-        action_layout.setSpacing(6)
+        action_layout.setContentsMargins(10, 18, 10, 12)
+        action_layout.setSpacing(8)
 
         self.radio_click_delete = QRadioButton("🗑️ Delete Circle on Click (Recommended)")
+        self.radio_click_delete.setMinimumHeight(22)
         self.radio_click_delete.setChecked(True)
         self.radio_click_delete.toggled.connect(self.on_click_behavior_changed)
 
         self.radio_click_toggle = QRadioButton("⚪ Toggle Active / Deselected on Click")
+        self.radio_click_toggle.setMinimumHeight(22)
         self.radio_click_toggle.toggled.connect(self.on_click_behavior_changed)
 
         action_layout.addWidget(self.radio_click_delete)
@@ -943,12 +1053,12 @@ class MainWindow(QMainWindow):
 
         bulk_row = QHBoxLayout()
         btn_sel_all = QPushButton("Select All")
-        btn_sel_all.setFixedHeight(28)
+        btn_sel_all.setMinimumHeight(30)
         btn_sel_all.setStyleSheet("font-size: 11px; background-color: #334155; color: #86efac;")
         btn_sel_all.clicked.connect(self.select_all_pipes)
 
         btn_desel_all = QPushButton("Deselect All")
-        btn_desel_all.setFixedHeight(28)
+        btn_desel_all.setMinimumHeight(30)
         btn_desel_all.setStyleSheet("font-size: 11px; background-color: #334155; color: #f87171;")
         btn_desel_all.clicked.connect(self.deselect_all_pipes)
 
@@ -961,11 +1071,12 @@ class MainWindow(QMainWindow):
         # ----------------- AI SIZE DIFFERENTIATION -----------------
         size_settings_group = QGroupBox("AI SIZE DIFFERENTIATION")
         size_settings_layout = QVBoxLayout(size_settings_group)
-        size_settings_layout.setContentsMargins(10, 14, 10, 10)
-        size_settings_layout.setSpacing(6)
+        size_settings_layout.setContentsMargins(10, 18, 10, 12)
+        size_settings_layout.setSpacing(8)
 
         lbl_size_mode = QLabel("Auto-Categorize Detected Pipes:")
-        lbl_size_mode.setStyleSheet("font-size: 11px; font-weight: 600; color: #cbd5e1;")
+        lbl_size_mode.setMinimumHeight(20)
+        lbl_size_mode.setStyleSheet("font-size: 11px; font-weight: 600; color: #cbd5e1; background: transparent;")
         size_settings_layout.addWidget(lbl_size_mode)
 
         self.combo_size_tiers = QComboBox()
@@ -974,7 +1085,7 @@ class MainWindow(QMainWindow):
         self.combo_size_tiers.addItem("🟢🔴 2 Types (Green Small / Red Large)", 2)
         self.combo_size_tiers.addItem("🟢🟡🔴 3 Types (Green / Yellow / Red)", 3)
         self.combo_size_tiers.setCurrentIndex(0)
-        self.combo_size_tiers.setFixedHeight(32)
+        self.combo_size_tiers.setMinimumHeight(32)
         self.combo_size_tiers.setStyleSheet(
             "background-color: #1e293b; color: #f8fafc; border: 1px solid #475569; padding: 3px 8px; border-radius: 4px;"
         )
@@ -983,16 +1094,22 @@ class MainWindow(QMainWindow):
 
         # Size Split Slider (appears when 2 tiers are active)
         self.split_group = QFrame()
-        self.split_group.setStyleSheet("background-color: #1e293b; border-radius: 6px; padding: 6px;")
+        self.split_group.setObjectName("splitGroupFrame")
+        self.split_group.setStyleSheet(
+            "#splitGroupFrame { background-color: #1e293b; border: 1px solid #334155; border-radius: 6px; } "
+            "#splitGroupFrame QLabel { border: none; background: transparent; }"
+        )
         split_layout = QVBoxLayout(self.split_group)
-        split_layout.setContentsMargins(6, 6, 6, 6)
-        split_layout.setSpacing(4)
+        split_layout.setContentsMargins(8, 8, 8, 8)
+        split_layout.setSpacing(6)
 
         split_header = QHBoxLayout()
         lbl_split_title = QLabel("Size Split Ruler:")
-        lbl_split_title.setStyleSheet("font-size: 11px; font-weight: 700; color: #38bdf8;")
+        lbl_split_title.setMinimumHeight(18)
+        lbl_split_title.setStyleSheet("font-size: 11px; font-weight: 700; color: #38bdf8; border: none; background: transparent;")
         self.lbl_split_val = QLabel("24.0 px")
-        self.lbl_split_val.setStyleSheet("font-size: 11px; font-weight: 800; color: #38bdf8;")
+        self.lbl_split_val.setMinimumHeight(18)
+        self.lbl_split_val.setStyleSheet("font-size: 11px; font-weight: 800; color: #38bdf8; border: none; background: transparent;")
         split_header.addWidget(lbl_split_title)
         split_header.addStretch()
         split_header.addWidget(self.lbl_split_val)
@@ -1001,12 +1118,13 @@ class MainWindow(QMainWindow):
         self.slider_split = QSlider(Qt.Orientation.Horizontal)
         self.slider_split.setRange(10, 100)
         self.slider_split.setValue(24)
+        self.slider_split.setMinimumHeight(20)
         self.slider_split.valueChanged.connect(self.on_split_slider_changed)
         split_layout.addWidget(self.slider_split)
 
         btn_snap_row = QHBoxLayout()
         self.btn_snap_auto = QPushButton("⚡ Auto-Snap Threshold")
-        self.btn_snap_auto.setFixedHeight(24)
+        self.btn_snap_auto.setMinimumHeight(26)
         self.btn_snap_auto.setStyleSheet("font-size: 10px; background-color: #334155; color: #38bdf8; border-radius: 4px;")
         self.btn_snap_auto.clicked.connect(self.on_auto_snap_clicked)
         btn_snap_row.addWidget(self.btn_snap_auto)
@@ -1020,20 +1138,25 @@ class MainWindow(QMainWindow):
         # ----------------- AI MODEL SETTINGS -----------------
         ai_group = QGroupBox("AI MODEL SETTINGS")
         ai_layout = QVBoxLayout(ai_group)
-        ai_layout.setContentsMargins(10, 14, 10, 10)
+        ai_layout.setContentsMargins(10, 18, 10, 12)
         ai_layout.setSpacing(8)
 
         # Auto Sensitivity Checkbox
         self.chk_auto_conf = QCheckBox("⚡ Auto Sensitivity (Adaptive)")
+        self.chk_auto_conf.setMinimumHeight(22)
         self.chk_auto_conf.setChecked(True)
-        self.chk_auto_conf.setStyleSheet("font-size: 11px; font-weight: 700; color: #38bdf8;")
+        self.chk_auto_conf.setStyleSheet("font-size: 11px; font-weight: 700; color: #38bdf8; background: transparent;")
         self.chk_auto_conf.toggled.connect(self.on_auto_conf_toggled)
         ai_layout.addWidget(self.chk_auto_conf)
 
         conf_row = QHBoxLayout()
-        conf_row.addWidget(QLabel("Confidence Floor:"))
+        lbl_conf_title = QLabel("Confidence Floor:")
+        lbl_conf_title.setMinimumHeight(20)
+        lbl_conf_title.setStyleSheet("background: transparent;")
+        conf_row.addWidget(lbl_conf_title)
         self.lbl_conf_val = QLabel("Auto: 35%")
-        self.lbl_conf_val.setStyleSheet("font-weight: 700; color: #38bdf8;")
+        self.lbl_conf_val.setMinimumHeight(20)
+        self.lbl_conf_val.setStyleSheet("font-weight: 700; color: #38bdf8; background: transparent;")
         conf_row.addStretch()
         conf_row.addWidget(self.lbl_conf_val)
         ai_layout.addLayout(conf_row)
@@ -1041,25 +1164,28 @@ class MainWindow(QMainWindow):
         self.slider_conf = QSlider(Qt.Orientation.Horizontal)
         self.slider_conf.setRange(10, 85)
         self.slider_conf.setValue(35)
+        self.slider_conf.setMinimumHeight(20)
         self.slider_conf.valueChanged.connect(self.on_conf_slider_changed)
         ai_layout.addWidget(self.slider_conf)
 
         # Nested pipes checkbox
         self.chk_nested = QCheckBox("🎯 Detect Nested / Inner Pipes")
+        self.chk_nested.setMinimumHeight(22)
         self.chk_nested.setChecked(True)
-        self.chk_nested.setStyleSheet("font-size: 11px; font-weight: 700; color: #a78bfa;")
+        self.chk_nested.setStyleSheet("font-size: 11px; font-weight: 700; color: #a78bfa; background: transparent;")
         self.chk_nested.setToolTip("Detects smaller pipes inside larger ones without suppression.")
         ai_layout.addWidget(self.chk_nested)
 
         # Occluded / Stacked pipes checkbox
         self.chk_occluded = QCheckBox("🌓 Detect Occluded / Stacked Pipes")
+        self.chk_occluded.setMinimumHeight(22)
         self.chk_occluded.setChecked(True)
-        self.chk_occluded.setStyleSheet("font-size: 11px; font-weight: 700; color: #c084fc;")
+        self.chk_occluded.setStyleSheet("font-size: 11px; font-weight: 700; color: #c084fc; background: transparent;")
         self.chk_occluded.setToolTip("Uses sub-pixel RANSAC arc curvature to reconstruct occluded pipes and recover background pipes.")
         ai_layout.addWidget(self.chk_occluded)
 
-        self.btn_run = QPushButton("⚡ Detect & Count (AI)")
-        self.btn_run.setFixedHeight(40)
+        self.btn_run = QPushButton("⚡ Detect && Count (AI)")
+        self.btn_run.setMinimumHeight(40)
         self.btn_run.setStyleSheet(
             "background-color: #0284c7; color: #ffffff; font-size: 13px; font-weight: 700; border-radius: 6px;"
         )
@@ -1078,7 +1204,7 @@ class MainWindow(QMainWindow):
 
         # Export Excel Button
         self.btn_export = QPushButton("📊 Export Data to Excel (.xlsx)")
-        self.btn_export.setFixedHeight(40)
+        self.btn_export.setMinimumHeight(40)
         self.btn_export.setStyleSheet(
             "background-color: #15803d; color: #ffffff; font-size: 12px; font-weight: 700; border-radius: 6px;"
         )
@@ -1094,8 +1220,8 @@ class MainWindow(QMainWindow):
         control_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         control_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         control_scroll.setWidget(control_panel)
-        control_scroll.setMinimumWidth(300)
-        control_scroll.setMaximumWidth(400)
+        control_scroll.setMinimumWidth(330)
+        control_scroll.setMaximumWidth(420)
         splitter.addWidget(control_scroll)
 
         # ----------------- RIGHT PANEL: Responsive Canvas & Modern Navbar -----------------
@@ -1323,11 +1449,14 @@ class MainWindow(QMainWindow):
             background-color: #111827;
             border: 1px solid #1f293d;
             border-radius: 8px;
-            margin-top: 14px;
+            margin-top: 12px;
             font-weight: 700;
             font-size: 11px;
             color: #94a3b8;
-            padding: 10px;
+            padding-top: 8px;
+            padding-bottom: 4px;
+            padding-left: 2px;
+            padding-right: 2px;
         }
         QGroupBox::title {
             subcontrol-origin: margin;
@@ -1379,7 +1508,8 @@ class MainWindow(QMainWindow):
             border-color: #38bdf8;
             color: #ffffff;
         }
-        QRadioButton {
+        QRadioButton, QCheckBox {
+            background-color: transparent;
             color: #cbd5e1;
             font-size: 11px;
             font-weight: 500;
@@ -1395,6 +1525,9 @@ class MainWindow(QMainWindow):
         QRadioButton::indicator:checked {
             background-color: #38bdf8;
             border-color: #0284c7;
+        }
+        QSlider {
+            background-color: transparent;
         }
         QSlider::groove:horizontal {
             height: 6px;
@@ -1885,35 +2018,42 @@ class MainWindow(QMainWindow):
             if child.widget():
                 child.widget().deleteLater()
 
-        card_count = 0
         for cat_name in ["Green", "Yellow", "Red"]:
             stats = self.summary.size_stats.get(cat_name)
             if not stats or stats.count == 0:
                 continue
 
             card = QFrame()
-            card.setFixedHeight(48)
+            card.setObjectName("sizeTierCard")
+            card.setMinimumHeight(56)
+            card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
             card.setStyleSheet(
+                f"QFrame#sizeTierCard {{ "
                 f"background-color: #1e293b; "
                 f"border: 1px solid #334155; "
                 f"border-left: 5px solid {stats.hex_color}; "
-                f"border-radius: 6px;"
+                f"border-radius: 6px; "
+                f"}} "
+                f"QFrame#sizeTierCard QLabel {{ "
+                f"border: none; "
+                f"background: transparent; "
+                f"}}"
             )
             card_layout = QHBoxLayout(card)
-            card_layout.setContentsMargins(10, 4, 12, 4)
-            card_layout.setSpacing(6)
+            card_layout.setContentsMargins(12, 8, 14, 8)
+            card_layout.setSpacing(8)
 
             info_box = QVBoxLayout()
-            info_box.setSpacing(2)
+            info_box.setSpacing(3)
             lbl_name = QLabel(stats.name.upper())
-            lbl_name.setStyleSheet(f"font-size: 11px; font-weight: 800; color: {stats.hex_color};")
+            lbl_name.setStyleSheet(f"font-size: 11px; font-weight: 800; color: {stats.hex_color}; border: none; background: transparent;")
             lbl_diam = QLabel(f"Ø {stats.min_diam:.1f} - {stats.max_diam:.1f} px (avg {stats.avg_diam:.1f})")
-            lbl_diam.setStyleSheet("font-size: 10px; color: #94a3b8;")
+            lbl_diam.setStyleSheet("font-size: 10px; color: #94a3b8; border: none; background: transparent;")
             info_box.addWidget(lbl_name)
             info_box.addWidget(lbl_diam)
 
             lbl_count = QLabel(str(stats.count))
-            lbl_count.setStyleSheet(f"font-size: 22px; font-weight: 900; color: {stats.hex_color};")
+            lbl_count.setStyleSheet(f"font-size: 22px; font-weight: 900; color: {stats.hex_color}; border: none; background: transparent;")
             lbl_count.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
             card_layout.addLayout(info_box)
@@ -1921,25 +2061,26 @@ class MainWindow(QMainWindow):
             card_layout.addWidget(lbl_count)
 
             self.size_cards_layout.addWidget(card)
-            card_count += 1
-
-        total_container_height = max(50, card_count * 56)
-        self.size_cards_container.setFixedHeight(total_container_height)
 
         if getattr(self.summary, "nested_count", 0) > 0:
             lbl_nested = QLabel(f"🎯 Nested Pipes: {self.summary.nested_count} (inner rings)")
-            lbl_nested.setStyleSheet("font-size: 11px; color: #a78bfa; font-weight: 700; padding-top: 4px;")
+            lbl_nested.setMinimumHeight(22)
+            lbl_nested.setStyleSheet("font-size: 11px; color: #a78bfa; font-weight: 700; padding-top: 2px; border: none; background: transparent;")
             self.size_cards_layout.addWidget(lbl_nested)
 
         if getattr(self.summary, "occluded_count", 0) > 0:
             lbl_occluded = QLabel(f"🌓 Stacked / Partial: {self.summary.occluded_count} (reconstructed Ø)")
-            lbl_occluded.setStyleSheet("font-size: 11px; color: #c084fc; font-weight: 700; padding-top: 2px;")
+            lbl_occluded.setMinimumHeight(22)
+            lbl_occluded.setStyleSheet("font-size: 11px; color: #c084fc; font-weight: 700; padding-top: 2px; border: none; background: transparent;")
             self.size_cards_layout.addWidget(lbl_occluded)
 
         if deselected_count > 0:
             lbl_desel = QLabel(f"Excluded: {deselected_count} pipes")
-            lbl_desel.setStyleSheet("font-size: 11px; color: #ef4444; font-weight: 600; padding-top: 4px;")
+            lbl_desel.setMinimumHeight(22)
+            lbl_desel.setStyleSheet("font-size: 11px; color: #ef4444; font-weight: 600; padding-top: 2px; border: none; background: transparent;")
             self.size_cards_layout.addWidget(lbl_desel)
+
+        self.size_cards_container.updateGeometry()
 
     def on_export_clicked(self):
         if self.summary is None or len(self.summary.pipes) == 0:
@@ -1978,7 +2119,7 @@ def main():
     if sys.platform == "win32":
         try:
             import ctypes
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("haroonworld.pipecounterpro.ai.v2")
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
         except Exception:
             pass
 
@@ -1986,16 +2127,19 @@ def main():
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
     app = QApplication(sys.argv)
-    
-    icon_path = get_app_icon_path()
-    if icon_path:
-        app_icon = QIcon(icon_path)
+    app_icon = create_app_qicon()
+    if not app_icon.isNull():
         app.setWindowIcon(app_icon)
 
     window = MainWindow()
-    if icon_path:
-        window.setWindowIcon(QIcon(icon_path))
+    if not app_icon.isNull():
+        window.setWindowIcon(app_icon)
     window.show()
+    if sys.platform == "win32":
+        try:
+            apply_win32_window_icon(int(window.winId()))
+        except Exception:
+            pass
     sys.exit(app.exec())
 
 
