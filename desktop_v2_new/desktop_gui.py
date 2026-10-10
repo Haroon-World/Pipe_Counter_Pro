@@ -21,6 +21,15 @@ Responsive Architecture & Navbar Features:
 
 import os
 import sys
+
+# Ensure Windows Taskbar groups under our app identity and renders high-res icon
+if sys.platform == "win32":
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("haroonworld.pipecounterpro.ai.v2")
+    except Exception:
+        pass
+
 import math
 from typing import Optional, List, Tuple
 
@@ -653,11 +662,26 @@ class InteractiveGraphicsView(QGraphicsView):
 
 
 def get_app_icon_path() -> str:
-    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-    for name in ["app_icon.ico", "logo.png", "app_icon.png"]:
-        p = os.path.join(base, "assets", name)
-        if os.path.exists(p):
-            return p
+    meipass = getattr(sys, "_MEIPASS", "")
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    exe_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else ""
+    
+    search_dirs = [
+        os.path.join(meipass, "assets") if meipass else "",
+        meipass,
+        os.path.join(exe_dir, "_internal", "assets") if exe_dir else "",
+        os.path.join(exe_dir, "assets") if exe_dir else "",
+        exe_dir,
+        os.path.join(script_dir, "assets"),
+        script_dir,
+    ]
+    for d in search_dirs:
+        if not d or not os.path.isdir(d):
+            continue
+        for name in ["app_icon.ico", "app_icon.png", "logo.png"]:
+            p = os.path.join(d, name)
+            if os.path.exists(p):
+                return p
     return ""
 
 
@@ -1951,11 +1975,26 @@ class MainWindow(QMainWindow):
 
 
 def main():
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("haroonworld.pipecounterpro.ai.v2")
+        except Exception:
+            pass
+
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
     app = QApplication(sys.argv)
+    
+    icon_path = get_app_icon_path()
+    if icon_path:
+        app_icon = QIcon(icon_path)
+        app.setWindowIcon(app_icon)
+
     window = MainWindow()
+    if icon_path:
+        window.setWindowIcon(QIcon(icon_path))
     window.show()
     sys.exit(app.exec())
 

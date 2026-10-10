@@ -7,6 +7,7 @@ block_cipher = None
 added_files = [
     ('pipe_counting_repo/best.pt', 'pipe_counting_repo'),
     ('assets', 'assets'),
+    ('assets/app_icon.ico', '.'),
 ]
 
 hidden_imports = [
